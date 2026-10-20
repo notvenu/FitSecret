@@ -10,6 +10,9 @@ import { BRAND_LOGOS } from '@/lib/brand-logos';
 
 export const revalidate = 60;
 
+// Category tile sizes by position (mobile: 2 columns, md+: 4 columns).
+const TILE = ['col-span-2 md:row-span-2', 'md:col-span-2', '', '', 'md:row-span-2', 'col-span-2', 'md:row-span-2', 'md:col-span-2'];
+
 export default async function Home() {
   const [products, cats, brands] = await Promise.all([getProducts(), getCategories(), getBrands()]);
   const ranked = products.filter((p) => p.inStock && p.image).sort((a, b) => Number(b.featured) - Number(a.featured) || Number(!!b.brand) - Number(!!a.brand));
@@ -23,21 +26,27 @@ export default async function Home() {
 
       <section className="mx-auto mt-10 max-w-7xl px-4 md:px-6">
         <h2 className="display text-[clamp(2.6rem,6vw,5rem)]">Shop by category</h2>
-        <div className="mt-8 grid grid-cols-2 gap-x-4 gap-y-8 md:grid-cols-4">
-          {cats.slice(0, 8).map((c) => (
-            <Link key={c.slug} href={`/shop?category=${c.slug}`} className="group flex flex-col">
-              <div className="relative aspect-square overflow-hidden rounded-[var(--radius-card)] bg-surface">
-                {c.image && <Image src={c.image} alt="" fill sizes="(min-width: 768px) 24vw, 48vw" className="object-cover transition-transform duration-700 ease-out-expo group-hover:scale-105" />}
-              </div>
-              <div className="mt-3 flex items-start justify-between gap-2">
-                <div>
-                  <h3 className="display text-[clamp(1.25rem,2vw,1.7rem)]">{c.name}</h3>
-                  <span className="text-sm text-mute">{c.count} products</span>
+        {/* Text-only bento: fixed size pattern (A A B B / A A C D / E F F G / E H H G) so server and client render the same. */}
+        <div className="mt-8 grid auto-rows-[9.5rem] grid-flow-dense grid-cols-2 gap-3 md:auto-rows-[11rem] md:grid-cols-4 md:gap-4">
+          {cats.slice(0, 8).map((c, i) => {
+            const big = i === 0;
+            return (
+              <Link key={c.slug} href={`/shop?category=${c.slug}`}
+                className={`group relative flex flex-col justify-between overflow-hidden rounded-[var(--radius-card)] p-5 transition-colors duration-300 md:p-6 ${TILE[i] || ''} ${
+                  big ? 'bg-ink text-white hover:bg-ink-soft' : i === 5 ? 'bg-brand text-ink hover:bg-ink hover:text-white' : 'bg-surface hover:bg-surface-2'}`}>
+                <div className="flex items-start justify-between gap-3">
+                  <span className={`text-sm tabular-nums ${big ? 'text-white/60' : i === 5 ? 'text-ink/70 group-hover:text-white/60' : 'text-mute'}`}>{c.count} products</span>
+                  <ArrowUpRight size={big ? 28 : 20} className="shrink-0 transition-transform duration-300 group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
                 </div>
-                <ArrowUpRight size={20} className="mt-1 shrink-0 transition-transform duration-300 group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
-              </div>
-            </Link>
-          ))}
+                <div>
+                  {big && c.subs.length > 0 && (
+                    <p className="mb-3 hidden max-w-sm text-sm text-white/60 md:block">{c.subs.slice(0, 5).map((s) => s.name).join(' · ')}</p>
+                  )}
+                  <h3 className={`display leading-[0.95] ${big ? 'text-[clamp(2rem,4.5vw,3.75rem)]' : 'text-[clamp(1.25rem,2vw,1.75rem)]'}`}>{c.name}</h3>
+                </div>
+              </Link>
+            );
+          })}
         </div>
       </section>
 
