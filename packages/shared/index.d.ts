@@ -1,0 +1,12 @@
+export const TABLES: Record<string, Record<string, string>>;
+export function round2(n: number): number;
+export function calcLine(l: { qty: number; rate: number; discount_pct?: number; gst_rate?: number }, inclusive?: boolean): { taxable: number; tax: number; total: number };
+export function fyLabel(date?: string | Date): string;
+export function today(): string;
+export function inr(n: number | null | undefined): string;
+export function slugify(s: string): string;
+export const STATES: Record<string, string>;
+export const STATE_LIST: [string, string][];
+export const ORDER_FLOW: string[];
+export const ORDER_LABEL: Record<string, string>;
+export const GOALS: Record<string, string>;

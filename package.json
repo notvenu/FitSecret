@@ -1,0 +1,12 @@
+{
+  "name": "fitsecret",
+  "private": true,
+  "workspaces": ["packages/*", "apps/*"],
+  "scripts": {
+    "pos": "npm run start -w apps/pos",
+    "pos:dev": "npm run dev -w apps/pos",
+    "web": "npm run dev -w apps/web",
+    "build": "npm run build -w apps/pos && npm run build -w apps/web",
+    "test": "node --test packages/shared/test/*.test.js apps/pos/test/*.test.js apps/web/admin/test/*.test.js"
+  }
+}

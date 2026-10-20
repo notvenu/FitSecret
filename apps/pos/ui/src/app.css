@@ -1,0 +1,47 @@
+@import "tailwindcss";
+
+/* Same brand system as the website: Clash Display headings, Satoshi text, charcoal ink + logo green.
+   Fonts are bundled in public/fonts so the counter works offline.
+   Shape rule (matches web): buttons and chips are pills, cards 14px, inputs 10px. */
+@font-face { font-family: Satoshi; src: url(/fonts/Satoshi-400.woff2) format("woff2"); font-weight: 400; font-display: swap; }
+@font-face { font-family: Satoshi; src: url(/fonts/Satoshi-500.woff2) format("woff2"); font-weight: 500; font-display: swap; }
+@font-face { font-family: Satoshi; src: url(/fonts/Satoshi-700.woff2) format("woff2"); font-weight: 600 700; font-display: swap; }
+@font-face { font-family: Satoshi; src: url(/fonts/Satoshi-900.woff2) format("woff2"); font-weight: 800 900; font-display: swap; }
+@font-face { font-family: "Clash Display"; src: url(/fonts/ClashDisplay-500.woff2) format("woff2"); font-weight: 500; font-display: swap; }
+@font-face { font-family: "Clash Display"; src: url(/fonts/ClashDisplay-600.woff2) format("woff2"); font-weight: 600; font-display: swap; }
+@font-face { font-family: "Clash Display"; src: url(/fonts/ClashDisplay-700.woff2) format("woff2"); font-weight: 700; font-display: swap; }
+
+@theme {
+  --font-sans: Satoshi, "Segoe UI", system-ui, sans-serif;
+  --font-mono: "Cascadia Mono", Consolas, ui-monospace, monospace;
+  --font-display: "Clash Display", Satoshi, sans-serif;
+  /* Fit Secrets logo colours, identical to apps/web/app/globals.css */
+  --color-ink: #1e2a2d;
+  --color-ink-2: #2b393d;
+  --color-brand: #7cd62c;
+  --color-brand-d: #3d7a10; /* green text on white (AA contrast) */
+  --color-flame: #c2410c;
+  --color-paper: #f3f5f5;
+  --color-line: #e4e8e8;
+}
+
+@layer base {
+  body { @apply bg-paper font-sans text-ink antialiased; font-feature-settings: "tnum"; }
+  input, select, textarea { @apply outline-none; }
+  :focus-visible { @apply outline-2 outline-offset-1 outline-ink; }
+}
+
+@utility input {
+  @apply w-full rounded-[10px] border border-line bg-white px-3 py-2 text-sm transition-colors placeholder:text-black/40 focus:border-ink focus:ring-2 focus:ring-brand/50;
+}
+@utility card { @apply rounded-[14px] border border-line bg-white; }
+@utility display { font-family: var(--font-display); font-weight: 600; letter-spacing: -0.02em; word-spacing: 0.08em; line-height: 1; }
+
+@keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.rise { animation: rise .14s cubic-bezier(.2,.8,.2,1) both; }
+
+@media print {
+  @page { margin: 8mm; }
+  .no-print { display: none !important; }
+  body { background: white; }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "@fitsecret/shared",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    },
+    "./seed": {
+      "types": "./seed.d.ts",
+      "default": "./seed.js"
+    }
+  }
+}
