@@ -14,5 +14,9 @@ export default defineConfig({
   envPrefix: 'NEXT_PUBLIC_', // exposes only public keys, never SUPABASE_SERVICE_ROLE_KEY
   plugins: [react(), tailwindcss()],
   resolve: { alias: { '@backend': at('./entry.js') } },
-  build: { outDir: at('../public/admin'), emptyOutDir: true },
+  build: {
+    outDir: at('../public/admin'), emptyOutDir: true,
+    // libraries and the 574-item catalogue in their own chunks, so no file trips the 500 kB warning
+    rolldownOptions: { output: { codeSplitting: { groups: [{ name: 'vendor', test: /node_modules[\\/](?!tesseract)/ }, { name: 'catalog', test: /packages[\\/]shared[\\/](catalog|seed)/ }] } } },
+  },
 });
