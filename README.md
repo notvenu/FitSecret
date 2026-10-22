@@ -22,6 +22,42 @@ packages/shared Table definitions, GST maths, demo catalogue (used by both apps)
 supabase/       Cloud Postgres schema, security policies, sync + ordering functions
 ```
 
+## Coming from Vyapar
+
+The POS menu uses Vyapar's names, order and Alt-key shortcuts (Alt+S sale, Alt+P purchase, Alt+I payment-in, Ctrl+F Open Anything…; see “Shortcuts” in the top bar).
+Sale orders, proforma invoices, delivery challans and purchase orders don't touch stock or money until you **Convert** them. **POS mode** (top bar)
+is a full-screen counter with several bills open at once, and the counter remembers it.
+Gold-plan features: party credit limits (warning at billing), party-wise item rates (a party's last rate is reused), wholesale price from a
+minimum quantity, Check profit on the bill, loyalty points (Parties → Loyalty Points; redeemed as payment mode `points`), and Accounting:
+Chart of Accounts, fixed assets, Journal Entries, Account Statements, Balance Sheet and Trial Balance. These need `supabase/migrations/0002_gold.sql`.
+Utilities imports Vyapar's item/party export (save the Excel file as CSV) and prints barcode labels. Reports live in `packages/shared/reports.js`,
+one implementation used by both the POS server and /admin.
+Also from Vyapar's settings (Settings → Invoice, print & billing): custom invoice prefixes, UPI QR / bank details / terms on invoices, three A4 layouts,
+stop-sale-on-negative-stock, serial/IMEI and mfg dates, TCS on bills, foreign-currency totals and party custom fields. Parties get payment terms (due
+dates + overdue badges), shipping address and groups; payments take TDS. Utilities adds Verify My Data, branch stock transfer (Items → Stock ±),
+Export To Tally (voucher XML) and Import From Tally (masters XML). Reports add GSTR-3B, GSTR-9, TDS/TCS, Form 27EQ and party-group reports.
+These need `supabase/migrations/0003_vyapar_rest.sql`.
+
+**Online Store** (top bar → Online Store, or Alt+W) is a full-screen mode for the website, remembered per counter like POS mode:
+orders (with search and status counts), products shown on the site (publish / hide / feature in bulk, photos, descriptions), categories
+(order and images used by the site), offers & coupons (checked again by `place_order`), customers (from orders, save to Parties), banners and
+the announcement bar, and store settings (taking orders on/off, delivery charge, free-delivery threshold, minimum order, COD limit, which branch
+fulfils orders). Settings live in the online branch's `settings.store`. Needs `supabase/migrations/0004_online_store.sql`.
+New items are no longer on the website until published in Online Store → Products.
+Online Store also has an **Inbox** (product reviews to approve, with a public reply and a *Verified buyer* badge for people who received the
+product; Contact-page messages; *Notify me when back in stock* requests with one-tap WhatsApp), bulk order actions, packing slips and
+shipping labels (with AWB and order barcodes), staff notes, and refund tracking (a cancelled prepaid order shows *Refund due* until marked
+refunded). Needs `supabase/migrations/0005_online_inbox.sql`.
+
+**Live courier tracking** on the website's Track page: set the order's courier to *Shiprocket* or *Delhivery* and enter the AWB in the POS.
+The website calls the courier from the server (`apps/web/app/api/shipment`) and shows the scan history and expected delivery date. Add
+`SHIPROCKET_EMAIL` + `SHIPROCKET_PASSWORD` (an API user from Shiprocket → Settings → API) and/or `DELHIVERY_API_TOKEN` to the website env.
+Responses are cached 10 minutes per AWB. Parsers: `packages/shared/couriers.js`.
+
+**Scanning supplier bills** (Purchase → Scan supplier bill) is free: Tesseract OCR runs in the browser. Internet is needed the first time (about 15 MB
+is downloaded, then cached). Every scan opens a review screen. Unmatched lines become new items and an unknown GSTIN becomes a new supplier,
+but only after you confirm. Clear, flat photos work best; for PDFs, paste the text or screenshot the page.
+
 ## How the two databases work
 
 - Each store PC keeps a **full SQLite copy** (`apps/pos/data/fitsecret.db`). Billing never waits for the internet.
@@ -55,7 +91,8 @@ Billing counters on the shop's Wi-Fi open `http://<shop-pc-ip>:4321`. On Windows
 
 ## Go-live checklist
 
-1. **Create a Supabase project** (Mumbai region). In SQL editor, run `supabase/migrations/0001_init.sql`.
+1. **Create a Supabase project** (Mumbai region). In SQL editor, run `supabase/migrations/0001_init.sql`, then `0002_gold.sql`, `0003_vyapar_rest.sql`, `0004_online_store.sql` and `0005_online_inbox.sql`.
+   (Already live? Run only the ones you haven't; they only add columns and tables and are safe to re-run.)
 2. **Create the POS sync user**: Authentication → Add user (email + password, auto-confirm). Then in SQL:
    ```sql
    insert into staff (user_id, name, role) select id, 'POS Vijayawada', 'admin' from auth.users where email = 'pos-vja@yourdomain.in';
@@ -67,7 +104,8 @@ Billing counters on the shop's Wi-Fi open `http://<shop-pc-ip>:4321`. On Windows
    -- optional: shipping_fee, free_shipping_above, cod_enabled, cod_limit
    ```
 5. **Website env** (`apps/web/.env.local` or Vercel): `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`,
-   `SUPABASE_SERVICE_ROLE_KEY`, `NEXT_PUBLIC_STORE_PHONE`, and for online payments `NEXT_PUBLIC_RAZORPAY_KEY_ID` + `RAZORPAY_KEY_SECRET`.
+   `SUPABASE_SERVICE_ROLE_KEY`, `NEXT_PUBLIC_STORE_PHONE`, and for online payments `NEXT_PUBLIC_RAZORPAY_KEY_ID` + `RAZORPAY_KEY_SECRET`,
+   and for live tracking `SHIPROCKET_EMAIL` + `SHIPROCKET_PASSWORD` and/or `DELHIVERY_API_TOKEN`.
    Without Razorpay keys the site offers Cash on Delivery only.
 6. **Supabase Auth → URL configuration**: add the site URL so customer email sign-in links work.
 7. Before launch: replace placeholder reviews (`apps/web/app/page.tsx`) and promo banners (`apps/web/components/Banners.tsx`),

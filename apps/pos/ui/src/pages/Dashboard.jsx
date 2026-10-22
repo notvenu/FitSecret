@@ -89,7 +89,7 @@ export default function Dashboard({ user }) {
 
       {/* Row 3: order pipeline + stock */}
       <div className="mt-3 grid gap-3 lg:grid-cols-3">
-        <a href="#/orders" className="card p-5 transition-shadow hover:shadow-md lg:col-span-2">
+        <a href="#/online/orders" className="card p-5 transition-shadow hover:shadow-md lg:col-span-2">
           <div className="mb-3 flex flex-wrap justify-between gap-2 text-sm"><span className="font-semibold">Online orders to handle</span><span className="text-black/45">{pipeTotal} open · {d.orders.delivered || 0} delivered · {d.orders.cancelled || 0} cancelled</span></div>
           <div className="grid grid-cols-5 gap-2">
             {PIPE.map(([k, l]) => (

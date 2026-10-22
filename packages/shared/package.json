@@ -11,6 +11,18 @@
     "./seed": {
       "types": "./seed.d.ts",
       "default": "./seed.js"
+    },
+    "./reports": "./reports.js",
+    "./billparse": "./billparse.js",
+    "./barcode": "./barcode.js",
+    "./tally": "./tally.js",
+    "./couriers": {
+      "types": "./couriers.d.ts",
+      "default": "./couriers.js"
+    },
+    "./store": {
+      "types": "./store.d.ts",
+      "default": "./store.js"
     }
   }
 }

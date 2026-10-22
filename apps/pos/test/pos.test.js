@@ -116,6 +116,76 @@ test('reports run', async () => {
   assert.equal((await admin('/api/invoices?type=sale')).length >= 3, true);
 });
 
+test('sale order converts once into a sale; only the sale moves stock', async () => {
+  const it = items[3], before = await stockOf(it.id);
+  const cust = await cashier('/api/t/parties', { name: 'Order Customer', type: 'customer', state_code: '37' });
+  const so = await cashier('/api/invoices', { type: 'sale_order', party_id: cust.id, lines: [{ item_id: it.id, qty: 2 }] });
+  assert.equal(so.status, 'open');
+  assert.ok(so.no.includes('-SO/'));
+  assert.equal(await stockOf(it.id), before);
+  const sale = await cashier('/api/invoices', { type: 'sale', from_id: so.id, party_id: cust.id, lines: [{ item_id: it.id, qty: 2 }], payments: [{ mode: 'upi', amount: 1e6 }] });
+  assert.equal((await admin(`/api/invoices/${so.id}`)).status, 'converted');
+  assert.equal(await stockOf(it.id), before - 2);
+  await assert.rejects(cashier('/api/invoices', { type: 'sale', from_id: so.id, party_id: cust.id, lines: [{ item_id: it.id, qty: 1 }] }), /already converted/);
+  const st = await admin(`/api/reports/x/party_statement?party_id=${cust.id}`);
+  assert.equal(st.at(-1).balance, 0, 'order adds nothing; paid sale nets to zero');
+  assert.ok(sale.notes.includes(so.no));
+});
+
+test('cash & bank: add, transfer, balances; cashier blocked', async () => {
+  const bal = async (m) => (await admin('/api/reports/x/cash_bank')).find((r) => r.mode === m)?.balance || 0;
+  const c0 = await bal('cash'), b0 = await bal('bank');
+  await admin('/api/cash', { kind: 'add', mode: 'cash', amount: 5000 });
+  await admin('/api/cash', { kind: 'transfer', mode: 'cash', to_mode: 'bank', amount: 3000 });
+  assert.equal(await bal('cash'), c0 + 2000);
+  assert.equal(await bal('bank'), b0 + 3000);
+  await assert.rejects(cashier('/api/cash', { kind: 'add', amount: 1 }), (e) => e.status === 403);
+  await assert.rejects(cashier('/api/reports/x/item_pnl'), /Admin only/);
+});
+
+test('barcode import: add_stock adds to existing items, opening_stock only to new ones', async () => {
+  const it = items[4], before = await stockOf(it.id);
+  const [, made] = await admin('/api/t/items/bulk', { rows: [{ id: it.id, name: it.name, add_stock: 5 }, { name: 'Scanned New', barcode: '8909990001112', gst_rate: 18, sale_price: 100, opening_stock: 4 }] });
+  assert.equal(await stockOf(it.id), before + 5);
+  assert.equal(await stockOf(made.id), 4);
+});
+
+test('bulk import is all-or-nothing, sets opening stock; recycle bin restores', async () => {
+  await assert.rejects(admin('/api/t/items/bulk', { rows: [{ name: 'Good One', sale_price: 100 }, { name: '' }] }), /Row 2/);
+  assert.equal((await admin('/api/items')).some((i) => i.name === 'Good One'), false);
+  const [a] = await admin('/api/t/items/bulk', { rows: [{ name: 'Imported Bar', sale_price: 120, opening_stock: 24 }] });
+  assert.equal(await stockOf(a.id), 24);
+  await admin(`/api/t/items/${a.id}`, null, 'DELETE');
+  assert.ok((await admin('/api/trash')).some((r) => r.id === a.id));
+  await admin('/api/trash/restore', { table: 'items', id: a.id });
+  assert.ok((await admin('/api/items')).some((i) => i.id === a.id));
+  await assert.rejects(cashier('/api/t/parties/bulk', { rows: [] }), (e) => e.status === 403);
+});
+
+test('gold: journals must balance, balance sheet balances, loyalty points capped at what was earned', async () => {
+  const acc = await admin('/api/t/accounts', { name: 'Shop furniture', type: 'fixed_asset', opening_balance: 0 });
+  await assert.rejects(admin('/api/t/journals', { lines: [{ account: 'acc:' + acc.id, debit: 100 }, { account: 'mode:cash', credit: 90 }] }), /must be equal/);
+  await assert.rejects(admin('/api/t/journals', { lines: [{ account: 'acc:nope', debit: 100 }, { account: 'mode:cash', credit: 100 }] }), /Unknown account/);
+  const j = await admin('/api/t/journals', { note: 'Bought racks', lines: [{ account: 'acc:' + acc.id, debit: 2500 }, { account: 'mode:cash', credit: 2500 }] });
+  assert.match(j.no, /^JE-/);
+  await assert.rejects(cashier('/api/t/journals', { lines: [] }), (e) => e.status === 403);
+  const bs = await admin('/api/reports/balance-sheet');
+  const tot = (a) => Math.round(a.reduce((s, x) => s + x.amount, 0) * 100);
+  assert.equal(tot(bs.assets), tot(bs.liabilities));
+  assert.equal(bs.assets.find((x) => x.name === 'Shop furniture').amount, 2500);
+
+  const branch = (await admin('/api/bootstrap')).branch;
+  await admin('/api/t/branches', { id: branch.id, settings: { loyalty: { enabled: true, earn_per_100: 1, point_value: 1 } } });
+  const cust = await cashier('/api/t/parties', { name: 'Loyal Lifter', type: 'customer', state_code: '37' });
+  await cashier('/api/invoices', { party_id: cust.id, lines: [{ item_id: items[1].id, qty: 1, rate: 1000 }], payments: [{ mode: 'cash', amount: 1000 }] });
+  const pts = (await cashier('/api/reports/x/loyalty')).find((x) => x.party_id === cust.id);
+  assert.equal(pts.balance, 10);
+  await assert.rejects(cashier('/api/invoices', { party_id: cust.id, lines: [{ item_id: items[1].id, qty: 1, rate: 100 }], payments: [{ mode: 'points', amount: 11 }, { mode: 'cash', amount: 89 }] }), /Only ₹10/);
+  await cashier('/api/invoices', { party_id: cust.id, lines: [{ item_id: items[1].id, qty: 1, rate: 100 }], payments: [{ mode: 'points', amount: 10 }, { mode: 'cash', amount: 90 }] });
+  assert.equal((await cashier('/api/reports/x/loyalty')).find((x) => x.party_id === cust.id).balance, 0); // 10 redeemed, 0.9 earned on the 90 paid
+  assert.ok(!(await admin('/api/reports/x/cash_bank')).some((m) => m.mode === 'points'), 'points are not money');
+});
+
 test('online order: auto-invoiced as soon as it arrives, COD collected on delivery, no double stock deduction', async () => {
   const branch = D.getMeta(db, 'branch_id'), it = items[4];
   D.adjustStock(db, branch, { item_id: it.id, qty: -2, note: 'simulate pulled order reservation' });
@@ -175,4 +245,64 @@ test('orders awaiting online payment are not invoiced', async () => {
 
 test('every write is queued for sync', async () => {
   assert.ok(db.prepare('select count(*) n from outbox').get().n > 50);
+});
+
+test('stock transfer moves stock to another branch; verify finds no mismatches', async () => {
+  const it = items[1], before = await stockOf(it.id);
+  const other = await admin('/api/t/branches', { name: 'FitSecret Guntur', code: 'GNT', state_code: '37' });
+  await admin('/api/stock/adjust', { item_id: it.id, qty: 2, to_branch: other.id });
+  assert.equal(await stockOf(it.id), before - 2);
+  assert.equal(db.prepare('select sum(qty) q from stock_movements where branch_id = ? and item_id = ?').get(other.id, it.id).q, 2);
+  await assert.rejects(admin('/api/stock/adjust', { item_id: it.id, qty: 1, to_branch: D.getMeta(db, 'branch_id') }), /another branch/);
+  const bad = (await admin('/api/reports/x/verify')).filter((x) => /≠|not moved/.test(x.check));
+  assert.deepEqual(bad, [], 'invoices, payments and stock agree after every test above');
+});
+
+test('Vyapar extras: prefix, TCS, due date, ship-to, TDS, serial + mfg, ledger ignores orders, tax reports, Tally', async () => {
+  const br = (await admin('/api/bootstrap')).branch;
+  await admin('/api/t/branches', { id: br.id, settings: { ...br.settings, prefixes: { sale_return: 'RET' } } });
+  const p = await admin('/api/t/parties', { type: 'customer', name: 'Gym Partner', gstin: '37ABCDE1234F1Z5', state_code: '37', payment_terms: 30,
+    shipping_address: 'Gym, MG Road', group_name: 'Gyms', extra: { Trainer: 'Ravi' } });
+  const sup = await admin('/api/t/parties', { type: 'supplier', name: 'Distributor X', state_code: '37' });
+  const it = items[2];
+  await admin('/api/invoices', { type: 'purchase', party_id: sup.id, lines: [{ item_id: it.id, qty: 5, rate: 100, batch_no: 'M1', expiry: '2027-06-30', mfg: '2026-06-01' }] });
+  assert.equal((await admin(`/api/items/${it.id}/batches`)).find((b) => b.batch_no === 'M1').mfg, '2026-06-01');
+
+  const inv = await admin('/api/invoices', { party_id: p.id, date: '2026-10-01', tcs_rate: 1, lines: [{ item_id: it.id, qty: 1, rate: 1000, serial: 'SN-1' }] });
+  assert.deepEqual([inv.tcs, inv.total, inv.due_date, inv.ship_to, inv.lines[0].serial], [10, 1010, '2026-10-31', 'Gym, MG Road', 'SN-1']);
+  assert.deepEqual(inv.party_extra, { Trainer: 'Ravi' });
+  await admin('/api/payments', { party_id: p.id, invoice_id: inv.id, direction: 'in', amount: 990, tds: 20, mode: 'bank' });
+  assert.equal((await admin('/api/invoices/' + inv.id)).status, 'paid', 'TDS settles the bill');
+  assert.equal((await admin('/api/parties')).find((x) => x.id === p.id).balance, 0);
+
+  const ret = await admin('/api/invoices', { type: 'sale_return', party_id: p.id, lines: [{ item_id: it.id, qty: 1, rate: 1000 }], payments: [{ mode: 'cash', amount: 1000 }] });
+  assert.match(ret.no, /^RET\/\d\d-\d\d\/0001$/);
+  await admin('/api/invoices', { type: 'sale_order', party_id: p.id, lines: [{ item_id: it.id, qty: 1, rate: 500 }] });
+  const led = await admin(`/api/parties/${p.id}/ledger`);
+  assert.ok(!led.rows.some((r) => r.type === 'sale_order'), 'orders are not money');
+  assert.equal(led.rows.at(-1).balance, 0);
+
+  const all = 'from=2000-01-01&to=2100-01-01';
+  assert.equal((await admin(`/api/reports/x/tds_receivable?${all}`))[0].tds, 20);
+  assert.equal((await admin(`/api/reports/x/form_27eq?${all}`))[0].tcs, 10);
+  assert.ok((await admin(`/api/reports/x/gstr9?${all}`)).find((r) => r.table === '4N').taxable > 0);
+  assert.ok((await admin(`/api/reports/x/by_party_group?${all}`)).find((r) => r.party_group === 'Gyms'));
+  const { toTallyXml } = await import('@fitsecret/shared/tally');
+  assert.match(toTallyXml((await admin(`/api/reports/x/tally_export?${all}`))[0]), /VOUCHERNUMBER>RET\//);
+  assert.deepEqual((await admin('/api/reports/x/verify')).filter((x) => /≠|not moved/.test(x.check)), []);
+  await assert.rejects(admin('/api/invoices', { currency: 'USD', lines: [{ item_id: it.id, qty: 1 }], payments: [{ mode: 'cash', amount: 1e5 }] }), /USD exchange rate/);
+});
+
+test('online orders: cancelling a prepaid order asks for a refund; staff notes and inbox rows are kept', async () => {
+  const branch = D.getMeta(db, 'branch_id'), it = items[3];
+  const o = D.save(db, 'orders', { order_no: 'FS2610220009', branch_id: branch, name: 'Prepaid', phone: '9000033333', status: 'placed', payment_method: 'online', payment_status: 'paid', total: it.sale_price });
+  D.save(db, 'order_lines', { order_id: o.id, item_id: it.id, name: it.name, qty: 1, price: it.sale_price, total: it.sale_price });
+  await cashier(`/api/orders/${o.id}`, { status: 'cancelled', internal_note: 'Out of stock at packing' });
+  let row = D.getWire(db, 'orders', o.id);
+  assert.deepEqual([row.payment_status, row.internal_note], ['refund_pending', 'Out of stock at packing']);
+  await cashier(`/api/orders/${o.id}`, { refund: 'done' });
+  assert.equal(D.getWire(db, 'orders', o.id).payment_status, 'refunded');
+  const f = D.save(db, 'feedback', { kind: 'message', name: 'Asha', phone: '9000000077', body: 'Vegan protein?', status: 'new' });
+  await cashier('/api/t/feedback', { id: f.id, status: 'done' });
+  assert.equal((await cashier('/api/t/feedback')).find((x) => x.id === f.id).status, 'done');
 });

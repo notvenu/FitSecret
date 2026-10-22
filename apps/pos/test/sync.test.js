@@ -43,7 +43,7 @@ function device(branchId) {
 before(async () => {
   pg = await PGlite.create();
   await pg.exec(SUPABASE_STUB);
-  await pg.exec(readFileSync(new URL('../../../supabase/migrations/0001_init.sql', import.meta.url), 'utf8'));
+  for (const f of ['0001_init.sql', '0002_gold.sql', '0003_vyapar_rest.sql', '0004_online_store.sql', '0005_online_inbox.sql']) await pg.exec(readFileSync(new URL('../../../supabase/migrations/' + f, import.meta.url), 'utf8'));
   await pg.exec(`insert into auth.users values ('${STAFF}'), ('${CUSTOMER}'); insert into staff (user_id, name, role) values ('${STAFF}', 'Sync', 'admin');`);
 });
 

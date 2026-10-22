@@ -6,6 +6,7 @@ import { CartProvider } from '@/components/cart';
 import Header, { Logo } from '@/components/Header';
 import { STORE } from '@fitsecret/shared/seed';
 import { getCategories } from '@/lib/catalog';
+import { getStore } from '@/lib/store';
 
 const clash = localFont({
   variable: '--font-clash',
@@ -40,11 +41,15 @@ const COLS: [string, [string, string][]][] = [
 ];
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
-  const cats = (await getCategories()).map(({ name, slug, subs }) => ({ name, slug, subs: subs.map(({ name, slug }) => ({ name, slug })) }));
+  const [allCats, { coupons, ...store }] = await Promise.all([getCategories(), getStore()]);
+  const cats = allCats.map(({ name, slug, subs }) => ({ name, slug, subs: subs.map(({ name, slug }) => ({ name, slug })) }));
+  const note = !store.open ? 'Online orders are paused right now. Visit or call the store.' : store.announcement
+    || (coupons[0] ? `Use code ${coupons[0].code} at checkout` : '');
   return (
     <html lang="en" className={`${clash.variable} ${satoshi.variable}`}>
       <body>
-        <CartProvider>
+        <CartProvider store={store}>
+          {note && <div className="bg-ink px-4 py-2 text-center text-sm font-medium text-white">{note}</div>}
           <Header cats={cats} />
           <main className="min-h-[60dvh]">{children}</main>
           <footer className="mt-28 border-t border-line">

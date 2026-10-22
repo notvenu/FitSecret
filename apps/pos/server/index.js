@@ -6,6 +6,8 @@ import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { TABLES, toWire, today, ORDER_LABEL } from '@fitsecret/shared';
 import { SEED_CATEGORIES, SEED_ITEMS } from '@fitsecret/shared/seed';
+import { runReport, balanceSheet, checkJournal, pointsValue } from '@fitsecret/shared/reports';
+import { checkCoupon } from '@fitsecret/shared/store';
 import * as D from './db.js';
 import * as R from './reports.js';
 import { createSync } from './sync.js';
@@ -95,7 +97,16 @@ export function createApp(db, sync) {
   }));
   app.get('/api/parties/:id/ledger', auth(), wrap((req) => R.ledger(db, req.params.id)));
 
-  const WRITABLE = { categories: 'admin', items: 'admin', parties: null, expenses: null, branches: 'admin' };
+  const WRITABLE = { categories: 'admin', items: 'admin', parties: null, expenses: null, branches: 'admin', accounts: 'admin', journals: 'admin', coupons: 'admin', feedback: null };
+  const liveRows = (t) => db.prepare(`select * from ${t} where deleted = 0`).all().map((r) => toWire(t, r));
+  const userErr = (fn) => { try { return fn(); } catch (e) { throw new D.UserError(e.message); } };
+  // Loyalty points can only pay up to what the customer has earned.
+  const checkPoints = (party_id, amount) => {
+    if (!(amount > 0)) return;
+    if (!party_id) throw new D.UserError('Select the customer to redeem points');
+    const max = pointsValue(liveRows, branch(), party_id);
+    if (amount > max + 0.001) throw new D.UserError(`Only ₹${max} of points available`);
+  };
   app.get('/api/t/:table', auth(), wrap((req) => {
     const t = req.params.table;
     if (!TABLES[t]) throw new D.UserError('Unknown table');
@@ -103,29 +114,59 @@ export function createApp(db, sync) {
     return db.prepare(`select * from ${t} where deleted = 0 ${branchScoped ? 'and branch_id = ?' : ''} order by created_at desc limit 1000`)
       .all(...(branchScoped ? [branch()] : [])).map((r) => toWire(t, r));
   }));
+  // One row of a master table, validated the same way for the form and for bulk import / bulk edit.
+  const writeRow = (t, body) => {
+    if (t === 'items' && body.barcode) {
+      const dup = db.prepare('select name from items where barcode = ? and id <> ? and deleted = 0').get(body.barcode, body.id || '');
+      if (dup) throw new D.UserError(`Barcode already used by ${dup.name}`);
+    }
+    if ('branch_id' in TABLES[t] && !body.branch_id && (!body.id || !D.get(db, t, body.id))) body.branch_id = branch();
+    if (t === 'expenses' && !(Number(body.amount) > 0)) throw new D.UserError('Enter an amount');
+    if (t === 'expenses') body.date ||= today();
+    if (t === 'coupons' && !body.deleted) body = userErr(() => checkCoupon({ active: true, ...(body.id && D.getWire(db, 'coupons', body.id)), ...body }, liveRows('coupons')));
+    const isNew = !body.id || !D.get(db, t, body.id);
+    if (isNew && !body.name && ['categories', 'items', 'parties', 'branches', 'accounts'].includes(t)) throw new D.UserError('Name required');
+    if (body.name !== undefined && !String(body.name).trim() && ['categories', 'items', 'parties', 'branches', 'accounts'].includes(t)) throw new D.UserError('Name required');
+    if (t === 'journals' && !body.deleted) {
+      body.lines = userErr(() => checkJournal(body, liveRows('accounts').filter((a) => a.branch_id === branch())));
+      body.date ||= today();
+      if (isNew && !body.no) body.no = 'JE-' + (db.prepare("select count(*) n from journals where branch_id = ?").get(branch()).n + 1);
+    }
+    const { opening_stock, add_stock, ...row } = body;
+    const saved = D.save(db, t, row);
+    if (t === 'items' && isNew && Number(opening_stock) > 0) D.adjustStock(db, branch(), { item_id: saved.id, qty: Number(opening_stock), note: 'Opening stock' });
+    // Barcode import: units counted onto an item that already exists
+    if (t === 'items' && !isNew && Number(add_stock) > 0) D.adjustStock(db, branch(), { item_id: saved.id, qty: Number(add_stock), note: 'Stock import' });
+    return saved;
+  };
   for (const [t, role] of Object.entries(WRITABLE)) {
-    app.post(`/api/t/${t}`, auth(role), wrap(({ body }) => {
-      if (t === 'items' && body.barcode) {
-        const dup = db.prepare('select name from items where barcode = ? and id <> ? and deleted = 0').get(body.barcode, body.id || '');
-        if (dup) throw new D.UserError(`Barcode already used by ${dup.name}`);
-      }
-      if ('branch_id' in TABLES[t] && !body.branch_id && (!body.id || !D.get(db, t, body.id))) body.branch_id = branch();
-      if (t === 'expenses' && !(Number(body.amount) > 0)) throw new D.UserError('Enter an amount');
-      if (t === 'expenses') body.date ||= today();
-      const isNew = !body.id || !D.get(db, t, body.id);
-      if (isNew && !body.name && ['categories', 'items', 'parties', 'branches'].includes(t)) throw new D.UserError('Name required');
-      if (body.name !== undefined && !String(body.name).trim() && ['categories', 'items', 'parties', 'branches'].includes(t)) throw new D.UserError('Name required');
-      return D.save(db, t, body);
-    }));
+    app.post(`/api/t/${t}`, auth(role), wrap(({ body }) => writeRow(t, body)));
+    // Import / bulk edit: all rows or none. Errors name the row so the sheet can be fixed.
+    app.post(`/api/t/${t}/bulk`, auth(t === 'parties' ? 'admin' : role), wrap(({ body }) => D.tx(db, () => (body.rows || []).map((r, i) => {
+      try { return writeRow(t, r); } catch (e) { throw new D.UserError(`Row ${i + 1}${r.name ? ` (${r.name})` : ''}: ${e.message}`); }
+    }))));
     app.delete(`/api/t/${t}/:id`, auth('admin'), wrap((req) => D.save(db, t, { id: req.params.id, deleted: true })));
   }
 
+  // ---------- recycle bin ----------
+  const TRASH = ['items', 'parties', 'categories', 'expenses'];
+  app.get('/api/trash', auth('admin'), wrap(() => TRASH.flatMap((t) => db.prepare(`select * from ${t} where deleted = 1 order by updated_at desc limit 300`).all()
+    .map((r) => ({ table: t, id: r.id, name: r.name || `${r.category} ${r.amount}`, deleted_at: r.updated_at })))));
+  app.post('/api/trash/restore', auth('admin'), wrap(({ body }) => {
+    if (!TRASH.includes(body.table)) throw new D.UserError('Cannot restore that');
+    return D.save(db, body.table, { id: body.id, deleted: false });
+  }));
+
   // ---------- invoices & payments ----------
-  app.post('/api/invoices', auth(), wrap(({ body, user }) => D.createInvoice(db, branch(), user, body)));
+  app.post('/api/invoices', auth(), wrap(({ body, user }) => {
+    checkPoints(body.party_id, (body.payments || []).filter((p) => p.mode === 'points').reduce((s, p) => s + Number(p.amount), 0));
+    return D.createInvoice(db, branch(), user, body);
+  }));
   app.get('/api/invoices', auth(), wrap(({ query }) => R.register(db, branch(), query)));
   app.get('/api/invoices/:id', auth(), wrap((req) => D.invoiceWithLines(db, req.params.id) || Promise.reject(new D.UserError('Not found'))));
   app.post('/api/invoices/:id/cancel', auth('admin'), wrap((req) => D.cancelInvoice(db, req.params.id)));
-  app.post('/api/payments', auth(), wrap(({ body }) => D.recordPayment(db, branch(), body)));
+  app.post('/api/payments', auth(), wrap(({ body }) => { if (body.mode === 'points') checkPoints(body.party_id, Number(body.amount)); return D.recordPayment(db, branch(), body); }));
+  app.post('/api/cash', auth('admin'), wrap(({ body }) => D.cashAdjust(db, branch(), body)));
 
   // ---------- online orders ----------
   app.get('/api/orders', auth(), wrap(({ query }) => {
@@ -150,6 +191,10 @@ export function createApp(db, sync) {
   app.get('/api/reports/stock', auth(), wrap(() => R.stockSummary(db, branch())));
   app.get('/api/reports/expiry', auth(), wrap(({ query }) => R.expiry(db, branch(), Number(query.days) || 60)));
   app.get('/api/reports/pnl', auth('admin'), wrap(({ query }) => R.pnl(db, branch(), query)));
+  app.get('/api/reports/balance-sheet', auth('admin'), wrap(({ query }) => balanceSheet(liveRows, branch(), query.to || undefined)));
+  app.get('/api/reports/x/:name', auth(), wrap((req) => {
+    try { return runReport(req.params.name, liveRows, branch(), req.query, req.user.role); } catch (e) { throw e.user ? new D.UserError(e.message) : e; }
+  }));
 
   // ---------- settings ----------
   app.get('/api/users', auth('admin'), wrap(() => db.prepare('select id, name, role, active from users order by name').all()));

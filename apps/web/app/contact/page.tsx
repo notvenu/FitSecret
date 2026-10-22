@@ -45,7 +45,7 @@ export default function Contact() {
 
         <div className="rounded-[var(--radius-card)] bg-surface p-6 md:p-8">
           <h2 className="display text-3xl">Send an enquiry</h2>
-          <p className="mt-2 text-sm text-mute">This opens WhatsApp with your message ready to send to the store.</p>
+          <p className="mt-2 text-sm text-mute">We usually reply within a few hours, on WhatsApp or by phone.</p>
           <EnquiryForm phone={STORE.phone} />
         </div>
       </div>

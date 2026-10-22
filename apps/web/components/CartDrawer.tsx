@@ -7,8 +7,6 @@ import { inr } from '@fitsecret/shared';
 import { useCart } from './cart';
 import ProductShot from './ProductShot';
 
-export const FREE_SHIP = 999;
-
 export function QtyStepper({ id, qty, max }: { id: string; qty: number; max: number }) {
   const { setQty } = useCart();
   return (
@@ -21,6 +19,7 @@ export function QtyStepper({ id, qty, max }: { id: string; qty: number; max: num
 }
 
 export function ShipProgress({ subtotal }: { subtotal: number }) {
+  const FREE_SHIP = useCart().store.free_shipping_above;
   const left = FREE_SHIP - subtotal;
   return (
     <div className="text-sm">

@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { GOALS, slugify } from '@fitsecret/shared';
+import { slugify } from '@fitsecret/shared';
 import { api, useApi, toast, fail, downloadCsv } from '../api.js';
 import { Btn, Field, Modal, Money, Page, Table, Badge, useForm, cx } from '../ui.jsx';
 
@@ -13,13 +13,13 @@ export function catOptions(cats) {
   ]);
 }
 
-export default function Items({ user }) {
+export default function Items({ user, route, boot, branch }) {
   const items = useApi('/items');
   const cats = useApi('/t/categories');
-  const [q, setQ] = useState('');
+  const [q, setQ] = useState(route?.query.q || '');
   const [cat, setCat] = useState('');
   const [filter, setFilter] = useState('');
-  const [edit, setEdit] = useState(null);
+  const [edit, setEdit] = useState(route?.query.new && user.role === 'admin' ? {} : null);
   const [adjust, setAdjust] = useState(null);
   const [detail, setDetail] = useState(null);
   const [catMgr, setCatMgr] = useState(false);
@@ -29,7 +29,7 @@ export default function Items({ user }) {
     (!cat || i.category_id === cat || cats.data?.find((c) => c.id === i.category_id)?.parent_id === cat) &&
     (filter !== 'low' || i.stock <= (i.low_stock || 0)) &&
     (filter !== 'online' || i.online) &&
-    `${i.name} ${i.sku} ${i.barcode} ${i.brand}`.toLowerCase().includes(q.toLowerCase())), [items.data, q, cat, filter]);
+    `${i.name} ${i.sku} ${i.barcode} ${i.brand} ${i.model || ''}`.toLowerCase().includes(q.toLowerCase())), [items.data, q, cat, filter]);
   const value = rows?.reduce((s, i) => s + Math.max(i.stock, 0) * (i.purchase_price || 0), 0) || 0;
 
   return (
@@ -51,7 +51,7 @@ export default function Items({ user }) {
       </div>
       <div className="card">
         <Table rows={rows} onRow={setDetail} rowClass={(i) => i.stock <= 0 && 'bg-red-50/60'} columns={[
-          { k: 'name', label: 'Item', r: (i) => <div><div className="font-medium">{i.name}</div><div className="text-[11px] text-black/45">{i.sku} · {i.category}</div></div> },
+          { k: 'name', label: 'Item', r: (i) => <div><div className="font-medium">{i.name}</div><div className="text-[11px] text-black/45">{i.sku} · {i.category}{i.location && ` · Rack ${i.location}`}</div></div> },
           { k: 'hsn', label: 'HSN / GST', r: (i) => <span className="text-xs">{i.hsn} · {i.gst_rate}%</span> },
           { k: 'purchase_price', label: 'Cost', right: true, r: (i) => <Money v={i.purchase_price} /> },
           { k: 'sale_price', label: 'Price', right: true, r: (i) => <><Money v={i.sale_price} className="font-medium" /><div className="text-[11px] text-black/40 line-through">{i.mrp}</div></> },
@@ -65,7 +65,7 @@ export default function Items({ user }) {
         ]} />
       </div>
       {edit && <ItemForm item={edit.id ? edit : null} cats={cats.data || []} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); items.reload(); }} />}
-      {adjust && <AdjustForm item={adjust} onClose={() => setAdjust(null)} onSaved={() => { setAdjust(null); items.reload(); }} />}
+      {adjust && <AdjustForm item={adjust} branches={(boot?.branches || []).filter((b) => b.id !== branch?.id)} onClose={() => setAdjust(null)} onSaved={() => { setAdjust(null); items.reload(); }} />}
       {detail && <ItemDetail item={detail} onClose={() => setDetail(null)} />}
       {catMgr && <Categories list={cats} onClose={() => setCatMgr(false)} />}
     </Page>
@@ -73,9 +73,8 @@ export default function Items({ user }) {
 }
 
 function ItemForm({ item, cats, onClose, onSaved }) {
-  const [f, set, bind] = useForm(item || { name: '', brand: '', category_id: cats[0]?.id, flavour: '', size: '', sku: '', barcode: '', hsn: '2106', gst_rate: 18,
-    mrp: '', sale_price: '', purchase_price: '', low_stock: 3, unit: 'pcs', online: true, featured: false, goals: [], description: '', image: '' });
-  const toggleGoal = (g) => set('goals', (f.goals || []).includes(g) ? f.goals.filter((x) => x !== g) : [...(f.goals || []), g]);
+  const [f, , bind] = useForm(item || { name: '', brand: '', category_id: cats[0]?.id, flavour: '', size: '', sku: '', barcode: '', hsn: '2106', gst_rate: 18,
+    mrp: '', sale_price: '', purchase_price: '', low_stock: 3, unit: 'pcs', online: false, featured: false, goals: [], description: '', image: '' }); // website fields: Online Store → Products
   const submit = async (e) => {
     e.preventDefault();
     const name = f.name || [f.brand, f.size, f.flavour].filter(Boolean).join(' ');
@@ -83,7 +82,7 @@ function ItemForm({ item, cats, onClose, onSaved }) {
     const num = (k) => (f[k] === '' || f[k] == null ? null : +f[k]);
     try {
       await api('/t/items', { ...f, name, group_key, slug: f.slug || slugify(`${group_key} ${f.flavour} ${f.size}`),
-        mrp: num('mrp'), sale_price: num('sale_price'), purchase_price: num('purchase_price'), gst_rate: num('gst_rate') || 0, low_stock: num('low_stock'),
+        mrp: num('mrp'), sale_price: num('sale_price'), purchase_price: num('purchase_price'), gst_rate: num('gst_rate') || 0, low_stock: num('low_stock'), wholesale_price: num('wholesale_price'), wholesale_min_qty: num('wholesale_min_qty'),
         barcode: f.barcode || null });
       toast('Item saved'); onSaved();
     } catch (e) { fail(e); }
@@ -104,36 +103,34 @@ function ItemForm({ item, cats, onClose, onSaved }) {
         <Field label="Sale price (incl. GST)" {...bind('sale_price')} required inputMode="decimal" />
         <Field label="Purchase price (excl. GST)" {...bind('purchase_price')} inputMode="decimal" />
         <Field label="Low stock alert at" {...bind('low_stock')} inputMode="decimal" />
-        <Field label="Product group (website variants)" {...bind('group_key')} className="col-span-2" hint="Items sharing this key show as flavour/size options of one product" />
-        <Field label="Image URL" {...bind('image')} className="col-span-2" />
-        <Field label="Description (website)" className="col-span-4"><textarea className="input" rows={3} {...bind('description')} /></Field>
-        <div className="col-span-4 flex flex-wrap items-center gap-4 text-sm">
-          <label className="flex items-center gap-2"><input {...bind('online', 'checkbox')} /> Sell on website</label>
-          <label className="flex items-center gap-2"><input {...bind('featured', 'checkbox')} /> Featured</label>
-          <span className="text-black/45">Goals:</span>
-          {Object.entries(GOALS).map(([g, l]) => (
-            <button type="button" key={g} onClick={() => toggleGoal(g)} className={cx('rounded-full px-2.5 py-0.5 text-xs', f.goals?.includes(g) ? 'bg-brand' : 'bg-black/5')}>{l}</button>
-          ))}
-        </div>
+        <Field label="Wholesale price" {...bind('wholesale_price')} inputMode="decimal" hint="For bulk buyers (gyms, resellers)" />
+        <Field label="Wholesale from qty" {...bind('wholesale_min_qty')} inputMode="decimal" hint="Applies automatically at this quantity" />
+        <Field label="Rack / location" {...bind('location')} hint="Shown when billing, e.g. A2-top" />
+        <Field label="Model no." {...bind('model')} />
+        <p className="col-span-2 self-end text-xs text-black/50">{item?.online ? 'On the website.' : 'Not on the website.'} Photos, description and publishing are in{' '}
+          <a href="#/online/products" className="font-semibold text-brand-d hover:underline">Online Store → Products</a>.</p>
         <div className="col-span-4 flex justify-end gap-2"><Btn onClick={onClose}>Cancel</Btn><Btn v="primary" type="submit">Save item</Btn></div>
       </form>
     </Modal>
   );
 }
 
-function AdjustForm({ item, onClose, onSaved }) {
+function AdjustForm({ item, branches, onClose, onSaved }) {
   const [f, , bind] = useForm({ dir: 'add', qty: '', batch_no: '', expiry: '', note: '' });
   const submit = async (e) => {
     e.preventDefault();
     try {
-      await api('/stock/adjust', { item_id: item.id, qty: (f.dir === 'add' ? 1 : -1) * +f.qty, batch_no: f.batch_no, expiry: f.expiry, note: f.note || (f.dir === 'add' ? 'Opening / found' : 'Damaged / expired') });
-      toast('Stock updated'); onSaved();
+      const to_branch = f.dir.startsWith('to:') ? f.dir.slice(3) : undefined;
+      await api('/stock/adjust', { item_id: item.id, qty: (f.dir === 'remove' ? -1 : 1) * +f.qty, batch_no: f.batch_no, expiry: f.expiry, to_branch,
+        note: f.note || (to_branch ? undefined : f.dir === 'add' ? 'Opening / found' : 'Damaged / expired') });
+      toast(to_branch ? 'Stock transferred' : 'Stock updated'); onSaved();
     } catch (e) { fail(e); }
   };
   return (
     <Modal title={`Adjust stock · ${item.name}`} onClose={onClose}>
       <form onSubmit={submit} className="grid grid-cols-2 gap-3">
-        <Field label="Type"><select className="input" {...bind('dir')}><option value="add">Add stock</option><option value="remove">Reduce stock</option></select></Field>
+        <Field label="Type"><select className="input" {...bind('dir')}><option value="add">Add stock</option><option value="remove">Reduce stock</option>
+          {branches.map((b) => <option key={b.id} value={'to:' + b.id}>Transfer to {b.name}</option>)}</select></Field>
         <Field label={`Quantity (now ${item.stock})`} {...bind('qty')} required autoFocus inputMode="decimal" />
         <Field label="Batch no." {...bind('batch_no')} />
         <Field label="Expiry" {...bind('expiry', 'date')} />

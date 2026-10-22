@@ -80,7 +80,7 @@ export const Loading = () => <div className="py-16 text-center text-sm text-blac
 
 const BADGE = { green: 'bg-emerald-100 text-emerald-800', amber: 'bg-amber-100 text-amber-800', red: 'bg-red-100 text-red-700', grey: 'bg-black/5 text-black/60', blue: 'bg-sky-100 text-sky-800', brand: 'bg-brand/40 text-ink' };
 export const Badge = ({ c = 'grey', children }) => <span className={cx('inline-block whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-medium', BADGE[c])}>{children}</span>;
-export const STATUS_C = { paid: 'green', partial: 'amber', unpaid: 'red', cancelled: 'grey', estimate: 'blue' };
+export const STATUS_C = { paid: 'green', partial: 'amber', unpaid: 'red', cancelled: 'grey', estimate: 'blue', open: 'blue', converted: 'green' };
 
 export function Tabs({ tabs, value, onChange }) {
   return (
@@ -126,7 +126,8 @@ export function Toasts() {
 export function useHotkeys(map) {
   useEffect(() => {
     const on = (e) => {
-      const k = (e.ctrlKey ? 'ctrl+' : '') + e.key;
+      // 'F9', 'ctrl+Enter', 'ctrl+f', 'alt+s' (Vyapar's shortcuts are Alt + letter)
+      const k = (e.ctrlKey ? 'ctrl+' : '') + (e.altKey ? 'alt+' : '') + (e.ctrlKey || e.altKey ? e.key.toLowerCase() : e.key);
       if (map[k]) { e.preventDefault(); map[k](e); }
     };
     addEventListener('keydown', on);

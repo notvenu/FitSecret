@@ -11,7 +11,7 @@ const BALANCE_SQL = `
   select p.id, p.name, p.type, p.phone, round(coalesce(p.opening_balance, 0)
     + coalesce((select sum(case type when 'sale' then total when 'purchase_return' then total when 'sale_return' then -total when 'purchase' then -total end)
                 from invoices i where i.party_id = p.id and i.deleted = 0 and i.status not in ('cancelled', 'estimate')), 0)
-    - coalesce((select sum(case direction when 'in' then amount else -amount end) from payments y where y.party_id = p.id and y.deleted = 0), 0), 2) balance
+    - coalesce((select sum(case direction when 'in' then 1 else -1 end * (amount + coalesce(tds, 0))) from payments y where y.party_id = p.id and y.deleted = 0), 0), 2) balance
   from parties p where p.deleted = 0`;
 
 export function partyBalances(db) {
@@ -76,7 +76,7 @@ export function dashboard(db, branch) {
 }
 
 export function register(db, branch, { type = 'sale', from, to, q }) {
-  return all(db, `select id, no, date, type, party_name, party_phone, total, paid, status, order_id is not null online from invoices
+  return all(db, `select id, no, date, due_date, type, party_name, party_phone, total, paid, status, order_id is not null online from invoices
     where branch_id = ? and deleted = 0 and type = ? and date between ? and ? and (? is null or no like ? or party_name like ? or party_phone like ?)
     order by date desc, created_at desc limit 500`, branch, type, from || '0000', to || '9999', q || null, `%${q}%`, `%${q}%`, `%${q}%`);
 }
@@ -142,9 +142,11 @@ export function ledger(db, party_id) {
   const p = one(db, 'select * from parties where id = ?', party_id);
   if (!p) return null;
   const rows = [
-    ...all(db, `select date, created_at, no ref, type, total amt from invoices where party_id = ? and deleted = 0 and status not in ('cancelled','estimate')`, party_id)
+    ...all(db, `select date, created_at, no ref, type, total amt from invoices where party_id = ? and deleted = 0 and status <> 'cancelled'
+                  and type in ('sale', 'purchase', 'sale_return', 'purchase_return')`, party_id)
       .map((r) => ({ ...r, amt: ['sale', 'purchase_return'].includes(r.type) ? r.amt : -r.amt })),
-    ...all(db, `select date, created_at, mode ref, 'payment_' || direction type, amount amt from payments where party_id = ? and deleted = 0`, party_id)
+    ...all(db, `select date, created_at, mode || case when tds > 0 then ' + TDS ' || tds else '' end ref, 'payment_' || direction type,
+                  amount + coalesce(tds, 0) amt from payments where party_id = ? and deleted = 0`, party_id)
       .map((r) => ({ ...r, amt: r.type === 'payment_in' ? -r.amt : r.amt })),
   ].sort((a, b) => (a.date + a.created_at).localeCompare(b.date + b.created_at));
   let bal = p.opening_balance || 0;

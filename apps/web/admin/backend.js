@@ -1,8 +1,10 @@
 // /admin back end: the POS server's API re-implemented on top of Supabase, running in the browser. No SQLite.
 // Same tables and sync RPCs as the POS: sync_pull keeps an in-memory copy of the data, every write is one atomic sync_push.
 // Roles are enforced here and by Supabase RLS (staff only); a hostile staff account could still call the RPCs directly.
-import { TABLES, columnsOf, calcInvoice, fyLabel, today, round2, STATES, ORDER_LABEL } from '@fitsecret/shared';
+import { TABLES, columnsOf, calcInvoice, today, round2, STATES, ORDER_LABEL, docPrefix, invoiceExtras } from '@fitsecret/shared';
 import { SEED_CATEGORIES, SEED_ITEMS } from '@fitsecret/shared/seed';
+import { runReport, balanceSheet, checkJournal, pointsValue } from '@fitsecret/shared/reports';
+import { checkCoupon } from '@fitsecret/shared/store';
 import { sb, me, UserError, loadMe, signOut, projectUrl } from './session.js';
 
 export const CLOUD = true;
@@ -79,8 +81,8 @@ function batches(branch, item) {
   const g = new Map();
   for (const m of live('stock_movements')) {
     if (m.branch_id !== branch || m.item_id !== item) continue;
-    const k = (m.batch_no || '') + '\0' + (m.expiry || ''), e = g.get(k) || { batch_no: m.batch_no, expiry: m.expiry, qty: 0 };
-    e.qty += m.qty; g.set(k, e);
+    const k = (m.batch_no || '') + '\0' + (m.expiry || ''), e = g.get(k) || { batch_no: m.batch_no, expiry: m.expiry, mfg: null, qty: 0 };
+    e.qty += m.qty; if (m.mfg > (e.mfg || '')) e.mfg = m.mfg; g.set(k, e);
   }
   return [...g.values()].map((b) => ({ ...b, qty: Math.round(b.qty * 1000) / 1000 })).filter((b) => b.qty !== 0)
     .sort((a, b) => (a.expiry == null) - (b.expiry == null) || String(a.expiry).localeCompare(String(b.expiry)) || String(a.batch_no).localeCompare(String(b.batch_no)));
@@ -91,10 +93,13 @@ const move = (branch, m) => save('stock_movements', { branch_id: branch, ...m })
 const TYPES = {
   sale: { sign: -1, pay: 'in', prefix: '' }, sale_return: { sign: 1, pay: 'out', prefix: 'CN' }, purchase: { sign: 1, pay: 'out', prefix: 'PB' },
   purchase_return: { sign: -1, pay: 'in', prefix: 'DN' }, estimate: { sign: 0, pay: null, prefix: 'EST' },
+  // Documents that move neither stock nor money until converted into a sale / purchase.
+  sale_order: { sign: 0, pay: null, prefix: 'SO' }, proforma: { sign: 0, pay: null, prefix: 'PI' },
+  delivery_challan: { sign: 0, pay: null, prefix: 'DC' }, purchase_order: { sign: 0, pay: null, prefix: 'PO' },
 };
 
 function nextNo(branch, type, date) {
-  const prefix = `${get('branches', branch)?.code || 'FS'}${TYPES[type].prefix ? '-' + TYPES[type].prefix : ''}/${fyLabel(date)}/`;
+  const prefix = docPrefix(get('branches', branch), type, TYPES[type].prefix, date);
   const last = Math.max(0, ...[...S.invoices.values()].filter((i) => i.branch_id === branch && i.type === type && i.no?.startsWith(prefix)).map((i) => parseInt(i.no.slice(prefix.length)) || 0));
   return prefix + String(last + 1).padStart(4, '0');
 }
@@ -115,23 +120,29 @@ function createInvoice(branch, user, body) {
     if (!item) throw new UserError('Item not found');
     const qty = Number(l.qty), rate = Number(l.rate ?? (type.startsWith('purchase') ? item.purchase_price : item.sale_price));
     if (!(qty > 0) || !(rate >= 0)) throw new UserError(`Invalid qty/rate for ${item.name}`);
-    return { item_id: item.id, name: item.name, hsn: item.hsn, batch_no: l.batch_no || null, expiry: l.expiry || null, qty, rate,
+    return { item_id: item.id, name: item.name, hsn: item.hsn, batch_no: l.batch_no || null, expiry: l.expiry || null, mfg: l.mfg || null, serial: l.serial || null, qty, rate,
       mrp: item.mrp, discount_pct: Number(l.discount_pct) || 0, gst_rate: Number(l.gst_rate ?? item.gst_rate) || 0, cost: item.purchase_price || 0 };
   });
   const calc = calcInvoice(lines, { inclusive, interState });
+  const x = userErr(() => invoiceExtras(body, party, { date, total: calc.total }));
+  const total = x.total; // includes TCS
   const payments = (body.payments || []).filter((p) => Number(p.amount) > 0);
-  const paid = round2(Math.min(sum(payments, (p) => Number(p.amount)), calc.total)); // excess = change returned
-  if (T.pay && paid < calc.total && !party) throw new UserError('Select a customer for credit / partial payment');
+  const paid = round2(Math.min(sum(payments, (p) => Number(p.amount)), total)); // excess = change returned
+  if (T.pay && paid < total && !party) throw new UserError('Select a customer for credit / partial payment');
+  const from = body.from_id ? get('invoices', body.from_id) : null;
+  if (body.from_id && (!from || from.status !== 'open' && from.status !== 'estimate')) throw new UserError('That order was already converted or cancelled');
 
   const inv = save('invoices', {
     branch_id: branch, type, no: (type === 'purchase' && body.no) || nextNo(branch, type, date), date,
     party_id: party?.id || null, party_name: party?.name || body.party_name || 'Cash Sale', party_phone: party?.phone || body.party_phone || null,
     party_gstin: party?.gstin || null, party_state: party?.state_code || br?.state_code || null, tax_inclusive: inclusive,
     subtotal: calc.subtotal, discount: calc.discount, taxable: calc.taxable, cgst: calc.cgst, sgst: calc.sgst, igst: calc.igst,
-    round_off: calc.round_off, total: calc.total, paid: T.pay ? paid : 0,
-    status: !T.pay ? 'estimate' : paid >= calc.total ? 'paid' : paid > 0 ? 'partial' : 'unpaid',
-    notes: body.notes || null, order_id: body.order_id || null, created_by: user?.name || null,
+    round_off: calc.round_off, total, paid: T.pay ? paid : 0, tcs: x.tcs, currency: x.currency, fx_rate: x.fx_rate, ship_to: x.ship_to, party_extra: x.party_extra,
+    due_date: T.pay && paid < total ? x.due_date : body.due_date || null,
+    status: !T.pay ? (type === 'estimate' ? 'estimate' : 'open') : paid >= total ? 'paid' : paid > 0 ? 'partial' : 'unpaid',
+    notes: body.notes || (from ? `From ${from.no}` : null), order_id: body.order_id || null, created_by: user?.name || null,
   });
+  if (from) save('invoices', { id: from.id, status: 'converted', notes: [from.notes, `Converted to ${inv.no}`].filter(Boolean).join(' · ') });
   calc.lines.forEach((l, i) => {
     save('invoice_lines', { ...l, invoice_id: inv.id, sort: i });
     if (!T.sign || body.skip_stock) return;
@@ -140,17 +151,17 @@ function createInvoice(branch, user, body) {
       let left = l.qty;
       for (const b of batches(branch, l.item_id).filter((b) => b.qty > 0)) {
         const take = Math.min(left, b.qty);
-        move(branch, { item_id: l.item_id, qty: -take, batch_no: b.batch_no, expiry: b.expiry, ref_type: type, ref_id: inv.id });
+        move(branch, { item_id: l.item_id, qty: -take, batch_no: b.batch_no, expiry: b.expiry, mfg: b.mfg, ref_type: type, ref_id: inv.id });
         if (!(left = round2(left - take))) break;
       }
       if (left > 0) move(branch, { item_id: l.item_id, qty: -left, ref_type: type, ref_id: inv.id });
     } else {
-      move(branch, { item_id: l.item_id, qty: T.sign * l.qty, batch_no: l.batch_no, expiry: l.expiry, ref_type: type, ref_id: inv.id });
+      move(branch, { item_id: l.item_id, qty: T.sign * l.qty, batch_no: l.batch_no, expiry: l.expiry, mfg: l.mfg, ref_type: type, ref_id: inv.id });
     }
     if (type === 'purchase') save('items', { id: l.item_id, purchase_price: inclusive ? round2(l.taxable / l.qty) : round2(l.rate * (1 - l.discount_pct / 100)) });
   });
   if (T.pay) {
-    let remaining = calc.total;
+    let remaining = total;
     for (const p of payments) {
       const amt = round2(Math.min(Number(p.amount), remaining));
       if (amt <= 0) break;
@@ -178,28 +189,53 @@ function cancelInvoice(id) {
 }
 
 function recordPayment(branch, body) {
-  const amount = round2(body.amount);
+  // TDS: the party deducted tax and pays it to the government for us, so it settles the bill like money does.
+  const amount = round2(body.amount), tds = round2(body.tds || 0);
   if (!(amount > 0)) throw new UserError('Enter an amount');
+  if (tds < 0) throw new UserError('TDS cannot be negative');
   if (!body.party_id || !get('parties', body.party_id)) throw new UserError('Select a party');
   if (!['in', 'out'].includes(body.direction)) throw new UserError('Bad direction');
   const p = save('payments', { branch_id: branch, party_id: body.party_id, invoice_id: body.invoice_id || null, direction: body.direction,
-    amount, mode: body.mode || 'cash', date: body.date || today(), note: body.note || null });
+    amount, tds: tds || null, mode: body.mode || 'cash', date: body.date || today(), note: body.note || null });
   if (body.invoice_id) {
-    const inv = get('invoices', body.invoice_id), paid = round2((inv.paid || 0) + amount);
+    const inv = get('invoices', body.invoice_id), paid = round2((inv.paid || 0) + amount + tds);
     save('invoices', { id: inv.id, paid, status: paid >= inv.total ? 'paid' : 'partial' });
   }
   return p;
 }
 
-function adjustStock(branch, { item_id, qty, batch_no, expiry, note }) {
+function adjustStock(branch, { item_id, qty, batch_no, expiry, note, to_branch }) {
   qty = Number(qty);
   if (!get('items', item_id)) throw new UserError('Item not found');
   if (!qty) throw new UserError('Quantity cannot be zero');
+  // Vyapar's godown stock transfer: out of this branch, into the other, same batch
+  if (to_branch) {
+    const to = get('branches', to_branch);
+    if (!to || to.deleted || to_branch === branch || qty < 0) throw new UserError('Pick another branch and a positive quantity');
+    move(branch, { item_id, qty: -qty, batch_no: batch_no || null, expiry: expiry || null, ref_type: 'transfer', note: note || `To ${to.name}` });
+    move(to_branch, { item_id, qty, batch_no: batch_no || null, expiry: expiry || null, ref_type: 'transfer', note: note || `From ${get('branches', branch)?.name}` });
+    return;
+  }
   move(branch, { item_id, qty, batch_no: batch_no || null, expiry: expiry || null, ref_type: 'adjust', note: note || null });
 }
 
+// Cash & bank: money added/withdrawn without a party, or moved between modes. Same as apps/pos/server/db.js cashAdjust.
+function cashAdjust(branch, { kind, mode = 'cash', to_mode, amount, date, note }) {
+  amount = round2(amount);
+  if (!(amount > 0)) throw new UserError('Enter an amount');
+  if (kind === 'transfer' && (!to_mode || to_mode === mode)) throw new UserError('Pick a different account to move money to');
+  if (!['add', 'reduce', 'transfer'].includes(kind)) throw new UserError('Bad adjustment');
+  date ||= today();
+  const base = { branch_id: branch, party_id: null, invoice_id: null, amount, date };
+  if (kind === 'transfer') {
+    save('payments', { ...base, direction: 'out', mode, note: note || `Transfer to ${to_mode}` });
+    save('payments', { ...base, direction: 'in', mode: to_mode, note: note || `Transfer from ${mode}` });
+  } else save('payments', { ...base, direction: kind === 'add' ? 'in' : 'out', mode, note: note || (kind === 'add' ? 'Money added' : 'Money withdrawn') });
+  return { ok: true };
+}
+
 // ---------- online orders ----------
-function updateOrder(id, { status, courier, awb, tracking_url, note }, user) {
+function updateOrder(id, { status, courier, awb, tracking_url, note, internal_note, refund }, user) {
   const o = get('orders', id);
   if (!o) throw new UserError('Order not found');
   if (status === 'cancelled' && o.status !== 'cancelled') {
@@ -209,6 +245,10 @@ function updateOrder(id, { status, courier, awb, tracking_url, note }, user) {
   if (courier !== undefined) patch.courier = courier;
   if (awb !== undefined) patch.awb = awb;
   if (tracking_url !== undefined) patch.tracking_url = tracking_url;
+  if (internal_note !== undefined) patch.internal_note = internal_note;
+  // prepaid order cancelled → money is owed back; staff mark it once refunded in Razorpay
+  if (status === 'cancelled' && o.status !== 'cancelled' && o.payment_status === 'paid' && o.payment_method === 'online') patch.payment_status = 'refund_pending';
+  if (refund === 'done' && o.payment_status === 'refund_pending') patch.payment_status = 'refunded';
   if (status) {
     patch.status = status;
     if (status === 'delivered' && o.payment_method === 'cod') patch.payment_status = 'paid';
@@ -234,12 +274,14 @@ function invoiceFromOrder(branch, user, id) {
   if (!o) throw new UserError('Order not found');
   if (o.invoice_id && get('invoices', o.invoice_id)) return invoiceWithLines(o.invoice_id);
   if (['pending_payment', 'cancelled'].includes(o.status)) throw new UserError('Order is not confirmed yet');
-  const lines = live('order_lines').filter((l) => l.order_id === id).map((l) => ({ item_id: l.item_id, qty: l.qty, rate: l.price }));
+  // a coupon discount is spread over the lines so the invoice matches what the customer paid for goods
+  const pct = o.discount > 0 && o.subtotal > 0 ? round2((o.discount / o.subtotal) * 100 * 100) / 100 : 0;
+  const lines = live('order_lines').filter((l) => l.order_id === id).map((l) => ({ item_id: l.item_id, qty: l.qty, rate: l.price, discount_pct: pct }));
   if (!lines.length) throw new UserError('Order has no items yet');
   const inv = createInvoice(o.branch_id || branch, user || { name: 'Website' }, {
     type: 'sale', lines, party_id: customerForOrder(o), order_id: o.id, skip_stock: true, date: new Date(o.created_at).toLocaleDateString('en-CA'),
     payments: o.payment_status === 'paid' ? [{ mode: o.payment_method === 'online' ? 'online' : 'cod', amount: Infinity }] : [], // COD stays due until delivered
-    notes: `Online order ${o.order_no}${o.shipping ? ` · shipping ₹${o.shipping} collected separately` : ''}`,
+    notes: `Online order ${o.order_no}${o.coupon ? ` · coupon ${o.coupon}` : ''}${o.shipping ? ` · shipping ₹${o.shipping} collected separately` : ''}`,
   });
   save('orders', { id, invoice_id: inv.id });
   return inv;
@@ -269,7 +311,7 @@ function partyBalances() {
   const add = new Map(), sign = { sale: 1, purchase_return: 1, sale_return: -1, purchase: -1 };
   const bump = (id, v) => id && add.set(id, (add.get(id) || 0) + v);
   for (const i of liveInv()) bump(i.party_id, (sign[i.type] || 0) * i.total);
-  for (const y of live('payments')) bump(y.party_id, y.direction === 'in' ? -y.amount : y.amount);
+  for (const y of live('payments')) bump(y.party_id, (y.direction === 'in' ? -1 : 1) * (y.amount + (y.tds || 0)));
   return live('parties').sort(byName).map((p) => ({ id: p.id, name: p.name, type: p.type, phone: p.phone, balance: round2((p.opening_balance || 0) + (add.get(p.id) || 0)) }));
 }
 
@@ -352,7 +394,7 @@ function register(branch, { type = 'sale', from, to, q }) {
   return live('invoices').filter((i) => i.branch_id === branch && i.type === type && i.date >= (from || '0000') && i.date <= (to || '9999')
     && (!n || [i.no, i.party_name, i.party_phone].some((v) => String(v ?? '').toLowerCase().includes(n))))
     .sort((a, b) => b.date.localeCompare(a.date) || b.created_at.localeCompare(a.created_at)).slice(0, 500)
-    .map((i) => ({ id: i.id, no: i.no, date: i.date, type: i.type, party_name: i.party_name, party_phone: i.party_phone, total: i.total, paid: i.paid, status: i.status, online: i.order_id != null }));
+    .map((i) => ({ id: i.id, no: i.no, date: i.date, due_date: i.due_date, type: i.type, party_name: i.party_name, party_phone: i.party_phone, total: i.total, paid: i.paid, status: i.status, online: i.order_id != null }));
 }
 
 function daybook(branch, date) {
@@ -397,8 +439,8 @@ function ledger(party_id) {
   const p = get('parties', party_id);
   if (!p) return null;
   const rows = [
-    ...liveInv().filter((i) => i.party_id === party_id).map((i) => ({ date: i.date, created_at: i.created_at, ref: i.no, type: i.type, amt: ['sale', 'purchase_return'].includes(i.type) ? i.total : -i.total })),
-    ...live('payments').filter((y) => y.party_id === party_id).map((y) => ({ date: y.date, created_at: y.created_at, ref: y.mode, type: 'payment_' + y.direction, amt: y.direction === 'in' ? -y.amount : y.amount })),
+    ...liveInv().filter((i) => i.party_id === party_id && ['sale', 'purchase', 'sale_return', 'purchase_return'].includes(i.type)).map((i) => ({ date: i.date, created_at: i.created_at, ref: i.no, type: i.type, amt: ['sale', 'purchase_return'].includes(i.type) ? i.total : -i.total })),
+    ...live('payments').filter((y) => y.party_id === party_id).map((y) => ({ date: y.date, created_at: y.created_at, ref: y.mode, type: 'payment_' + y.direction + (y.tds ? ` (TDS ${y.tds})` : ''), amt: (y.direction === 'in' ? -1 : 1) * (y.amount + (y.tds || 0)) })),
   ].sort((a, b) => (a.date + a.created_at).localeCompare(b.date + b.created_at));
   let bal = p.opening_balance || 0;
   return { party: p, opening: bal, rows: rows.map((r) => ({ ...r, balance: (bal = round2(bal + r.amt)) })) };
@@ -413,8 +455,16 @@ const branchId = () => {
   return (me?.branch_id && S.branches.get(me.branch_id)?.id) || bs[0]?.id;
 };
 const status = () => ({ state: syncError ? 'error' : 'online', pending: 0, lastSync, error: syncError, configured: true, url: projectUrl, email: me?.email });
-const WRITABLE = { categories: 'admin', items: 'admin', parties: null, expenses: null, branches: 'admin' };
-const NAMED = ['categories', 'items', 'parties', 'branches'];
+const WRITABLE = { categories: 'admin', items: 'admin', parties: null, expenses: null, branches: 'admin', accounts: 'admin', journals: 'admin', coupons: 'admin', feedback: null };
+const NAMED = ['categories', 'items', 'parties', 'branches', 'accounts'];
+const userErr = (fn) => { try { return fn(); } catch (e) { throw new UserError(e.message); } };
+// Loyalty points can only pay up to what the customer has earned.
+function checkPoints(branch, party_id, amount) {
+  if (!(amount > 0)) return;
+  if (!party_id) throw new UserError('Select the customer to redeem points');
+  const max = pointsValue(live, branch, party_id);
+  if (amount > max + 0.001) throw new UserError(`Only ₹${max} of points available`);
+}
 
 R('GET', '/bootstrap', 'open', async () => {
   if (!(await loadMe())) return { setup: false, branch: null, user: null, users: [], branches: [], sync: status() };
@@ -461,31 +511,62 @@ R('GET', '/t/:table', null, ({ params: { table: t }, branch }) => {
   const scoped = 'branch_id' in TABLES[t] && t !== 'orders';
   return live(t).filter((r) => !scoped || r.branch_id === branch).sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 1000);
 });
-R('POST', '/t/:table', null, ({ params: { table: t }, body, branch, user }) => {
+function writeRow(t, body, branch) {
+  if (t === 'items' && body.barcode) {
+    const dup = live('items').find((i) => i.barcode === body.barcode && i.id !== body.id);
+    if (dup) throw new UserError(`Barcode already used by ${dup.name}`);
+  }
+  const isNew = !body.id || !get(t, body.id);
+  if ('branch_id' in TABLES[t] && !body.branch_id && isNew) body.branch_id = branch;
+  if (t === 'expenses' && !(Number(body.amount) > 0)) throw new UserError('Enter an amount');
+  if (t === 'expenses') body.date ||= today();
+  if (t === 'coupons' && !body.deleted) body = userErr(() => checkCoupon({ active: true, ...get('coupons', body.id), ...body }, live('coupons')));
+  if (NAMED.includes(t) && ((isNew && !body.name) || (body.name !== undefined && !String(body.name).trim()))) throw new UserError('Name required');
+  if (t === 'journals' && !body.deleted) {
+    body.lines = userErr(() => checkJournal(body, live('accounts').filter((a) => a.branch_id === branch)));
+    body.date ||= today();
+    if (isNew && !body.no) body.no = 'JE-' + ([...S.journals.values()].filter((j) => j.branch_id === branch).length + 1);
+  }
+  const { opening_stock, add_stock, ...row } = body;
+  const saved = save(t, row);
+  if (t === 'items' && isNew && Number(opening_stock) > 0) adjustStock(branch, { item_id: saved.id, qty: Number(opening_stock), note: 'Opening stock' });
+  // Barcode import: units counted onto an item that already exists
+  if (t === 'items' && !isNew && Number(add_stock) > 0) adjustStock(branch, { item_id: saved.id, qty: Number(add_stock), note: 'Stock import' });
+  return saved;
+}
+const canWrite = (t, user, bulk) => {
   if (!(t in WRITABLE)) throw new UserError('Unknown table', 404);
-  if (WRITABLE[t] === 'admin' && user.role !== 'admin') throw new UserError('Admin only', 403);
-  return write(() => {
-    if (t === 'items' && body.barcode && live('items').some((i) => i.barcode === body.barcode && i.id !== body.id)) {
-      throw new UserError(`Barcode already used by ${live('items').find((i) => i.barcode === body.barcode && i.id !== body.id).name}`);
-    }
-    const isNew = !body.id || !get(t, body.id);
-    if ('branch_id' in TABLES[t] && !body.branch_id && isNew) body.branch_id = branch;
-    if (t === 'expenses' && !(Number(body.amount) > 0)) throw new UserError('Enter an amount');
-    if (t === 'expenses') body.date ||= today();
-    if (NAMED.includes(t) && ((isNew && !body.name) || (body.name !== undefined && !String(body.name).trim()))) throw new UserError('Name required');
-    return save(t, body);
-  });
+  if ((WRITABLE[t] === 'admin' || (bulk && t === 'parties')) && user.role !== 'admin') throw new UserError('Admin only', 403);
+};
+R('POST', '/t/:table', null, ({ params: { table: t }, body, branch, user }) => { canWrite(t, user); return write(() => writeRow(t, body, branch)); });
+// Import / bulk edit: one sync_push, so all rows or none.
+R('POST', '/t/:table/bulk', null, ({ params: { table: t }, body, branch, user }) => {
+  canWrite(t, user, true);
+  return write(() => (body.rows || []).map((r, i) => {
+    try { return writeRow(t, r, branch); } catch (e) { throw new UserError(`Row ${i + 1}${r.name ? ` (${r.name})` : ''}: ${e.message}`); }
+  }));
 });
 R('DELETE', '/t/:table/:id', 'admin', ({ params: { table: t, id } }) => {
   if (!(t in WRITABLE)) throw new UserError('Unknown table', 404);
   return write(() => save(t, { id, deleted: true }));
 });
+const TRASH = ['items', 'parties', 'categories', 'expenses'];
+R('GET', '/trash', 'admin', () => TRASH.flatMap((t) => [...S[t].values()].filter((r) => r.deleted).sort((a, b) => b.updated_at.localeCompare(a.updated_at)).slice(0, 300)
+  .map((r) => ({ table: t, id: r.id, name: r.name || `${r.category} ${r.amount}`, deleted_at: r.updated_at }))));
+R('POST', '/trash/restore', 'admin', ({ body }) => {
+  if (!TRASH.includes(body.table)) throw new UserError('Cannot restore that');
+  return write(() => save(body.table, { id: body.id, deleted: false }));
+});
 
-R('POST', '/invoices', null, ({ body, branch, user }) => write(() => createInvoice(branch, user, body)));
+R('POST', '/invoices', null, ({ body, branch, user }) => write(() => {
+  checkPoints(branch, body.party_id, (body.payments || []).filter((p) => p.mode === 'points').reduce((s, p) => s + Number(p.amount), 0));
+  return createInvoice(branch, user, body);
+}));
 R('GET', '/invoices', null, ({ query, branch }) => register(branch, query));
 R('GET', '/invoices/:id', null, ({ params }) => invoiceWithLines(params.id) || Promise.reject(new UserError('Not found', 404)));
 R('POST', '/invoices/:id/cancel', 'admin', ({ params }) => write(() => cancelInvoice(params.id)));
-R('POST', '/payments', null, ({ body, branch }) => write(() => recordPayment(branch, body)));
+R('POST', '/payments', null, ({ body, branch }) => write(() => { if (body.mode === 'points') checkPoints(branch, body.party_id, Number(body.amount)); return recordPayment(branch, body); }));
+R('POST', '/cash', 'admin', ({ body, branch }) => write(() => cashAdjust(branch, body)));
 
 R('GET', '/orders', null, ({ query }) =>
   live('orders').filter((o) => !query.status || o.status === query.status).sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 300)
@@ -503,6 +584,10 @@ R('GET', '/reports/gst', 'admin', ({ query, branch }) => gst(branch, query));
 R('GET', '/reports/stock', null, ({ branch }) => stockSummary(branch));
 R('GET', '/reports/expiry', null, ({ query, branch }) => expiry(branch, Number(query.days) || 60));
 R('GET', '/reports/pnl', 'admin', ({ query, branch }) => pnl(branch, query));
+R('GET', '/reports/balance-sheet', 'admin', ({ query, branch }) => balanceSheet(live, branch, query.to || undefined));
+R('GET', '/reports/x/:name', null, ({ params, query, branch, user }) => {
+  try { return runReport(params.name, live, branch, query, user.role); } catch (e) { throw e.user ? new UserError(e.message, e.status || 400) : e; }
+});
 
 // Staff, PINs, device sync and backups belong to the offline POS; here Supabase Auth and the cloud itself replace them.
 R('GET', '/users', 'admin', () => []);

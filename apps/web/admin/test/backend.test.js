@@ -17,7 +17,8 @@ const STUB = `
   alter default privileges in schema public grant all on tables to anon, authenticated, service_role;
   alter default privileges in schema public grant all on sequences to anon, authenticated, service_role;
   alter default privileges in schema public grant execute on functions to anon, authenticated, service_role;`;
-const SIG = { sync_push: ['p::jsonb'], sync_pull: ['p_since::bigint', 'p_limit::int'], place_order: ['p::jsonb'] };
+const SIG = { sync_push: ['p::jsonb'], sync_pull: ['p_since::bigint', 'p_limit::int'], place_order: ['p::jsonb'], store_info: [],
+  check_coupon: ['p_code::text', 'p_subtotal::numeric', 'p_phone::text'], submit_feedback: ['p::jsonb'] };
 
 let pg;
 // Call an RPC as a given Supabase role/user, like PostgREST would.
@@ -34,7 +35,7 @@ const rpc = (role, sub) => async (name, args) => {
 before(async () => {
   pg = await PGlite.create();
   await pg.exec(STUB);
-  await pg.exec(readFileSync(new URL('../../../../supabase/migrations/0001_init.sql', import.meta.url), 'utf8'));
+  for (const f of ['0001_init.sql', '0002_gold.sql', '0003_vyapar_rest.sql', '0004_online_store.sql', '0005_online_inbox.sql']) await pg.exec(readFileSync(new URL('../../../../supabase/migrations/' + f, import.meta.url), 'utf8'));
   await pg.exec(`insert into auth.users values ('${STAFF}'), ('${CUSTOMER}'); insert into staff (user_id, name, role) values ('${STAFF}', 'Test', 'admin');`);
   const asStaff = rpc('authenticated', STAFF);
   setClient({
@@ -107,4 +108,109 @@ test('website order: place_order reserves stock; invoice, COD collection and can
   await call(`/orders/${order.id}`, { status: 'cancelled' });
   assert.equal((await call(`/invoices/${delivered.invoice_id}`)).status, 'cancelled');
   assert.equal(await stockOf(item.id), 10);
+});
+
+test('Vyapar extras in /admin: prefix, TCS, due date, mfg batches, TDS, branch transfer; columns land in Postgres', async () => {
+  const [branch] = await call('/t/branches');
+  await call('/t/branches', { id: branch.id, settings: { ...branch.settings, prefixes: { sale: 'FS-INV' } } });
+  const item = (await call('/items'))[0];
+  const p = await call('/t/parties', { type: 'customer', name: 'Gym Co', state_code: '37', payment_terms: 15, shipping_address: 'Gym, MG Road' });
+  const sup = await call('/t/parties', { type: 'supplier', name: 'Dist 2', state_code: '37' });
+  await call('/invoices', { type: 'purchase', party_id: sup.id, lines: [{ item_id: item.id, qty: 2, rate: 100, batch_no: 'MF', expiry: '2029-01-01', mfg: '2026-05-01' }] });
+  assert.equal((await call(`/items/${item.id}/batches`)).find((b) => b.batch_no === 'MF').mfg, '2026-05-01');
+  const inv = await call('/invoices', { party_id: p.id, date: '2026-10-01', tcs_rate: 1, lines: [{ item_id: item.id, qty: 1, rate: 1000, serial: 'IMEI-9' }] });
+  assert.match(inv.no, /^FS-INV\/\d\d-\d\d\/0001$/);
+  assert.deepEqual([inv.tcs, inv.total, inv.due_date, inv.ship_to], [10, 1010, '2026-10-16', 'Gym, MG Road']);
+  await call('/payments', { party_id: p.id, invoice_id: inv.id, direction: 'in', amount: 1000, tds: 10, mode: 'bank' });
+  assert.equal((await call(`/invoices/${inv.id}`)).status, 'paid');
+  assert.equal((await call('/parties')).find((x) => x.id === p.id).balance, 0);
+  const row = (await pg.query('select tcs, due_date::text d, ship_to from invoices where id = $1', [inv.id])).rows[0];
+  assert.deepEqual([Number(row.tcs), row.d, row.ship_to], [10, '2026-10-16', 'Gym, MG Road']);
+  assert.equal((await pg.query('select serial from invoice_lines where invoice_id = $1', [inv.id])).rows[0].serial, 'IMEI-9');
+
+  const b2 = await call('/t/branches', { name: 'Guntur', code: 'GNT', state_code: '37' });
+  const before = await stockOf(item.id);
+  await call('/stock/adjust', { item_id: item.id, qty: 1, to_branch: b2.id });
+  assert.equal(await stockOf(item.id), before - 1);
+});
+
+test('Online Store: store settings + coupons are enforced by place_order; the invoice matches what the customer paid', async () => {
+  const anon = rpc('anon', null);
+  const online = (await pg.query('select online_branch_id id from shop_config')).rows[0].id;
+  const branch = (await call('/t/branches')).find((b) => b.id === online);
+  await call('/t/branches', { id: branch.id, settings: { ...branch.settings, store: { shipping_fee: 60, free_shipping_above: 5000, min_order: 100, announcement: 'Diwali sale' } } });
+  await assert.rejects(call('/t/coupons', { code: 'x', kind: 'percent', value: 10 }), /3-20 letters/);
+  await call('/t/coupons', { code: 'diwali10', kind: 'percent', value: 10, max_discount: 150, public: true, usage_limit: 2, per_phone: 1 });
+  await assert.rejects(call('/t/coupons', { code: 'DIWALI10', kind: 'flat', value: 5 }), /already exists/);
+
+  const info = await anon('store_info', {});
+  assert.equal(info.announcement, 'Diwali sale');
+  assert.equal(Number(info.shipping_fee), 60);
+  assert.deepEqual(info.coupons.map((c) => c.code), ['DIWALI10']);
+  assert.equal(Number((await anon('check_coupon', { p_code: 'diwali10', p_subtotal: 1000, p_phone: null })).discount), 100);
+
+  const item = (await call('/items')).find((i) => i.stock > 2);
+  const order = (phone, coupon) => anon('place_order', { p: { name: 'Coupon Buyer', phone, coupon, payment_method: 'cod', items: [{ item_id: item.id, qty: 1 }],
+    address: { line1: '12 MG Road', city: 'Vijayawada', state: 'Andhra Pradesh', pincode: '520010' } } });
+  const o = await order('9876500001', 'Diwali10');
+  const disc = Math.min(Math.round(item.sale_price * 10) / 100, 150);
+  assert.equal(Number(o.discount), disc);
+  assert.equal(Number(o.total), Math.round((item.sale_price - disc + 60) * 100) / 100, 'discount off, shipping on the rest');
+  await assert.rejects(order('9876500001', 'DIWALI10'), /COUPON_ALREADY_USED/);
+  await order('9876500002', 'DIWALI10');
+  await assert.rejects(order('9876500003', 'DIWALI10'), /COUPON_USED_UP/);
+
+  await call('/sync/now', {});
+  const placed = (await call('/orders?status=placed')).find((x) => x.id === o.id);
+  assert.equal(placed.coupon, 'DIWALI10');
+  const inv = await call(`/orders/${o.id}/invoice`, {});
+  assert.ok(Math.abs(inv.total - (Number(o.total) - 60)) <= 1, `invoice ${inv.total} = goods after discount`);
+
+  await call('/t/branches', { id: branch.id, settings: { ...branch.settings, store: { open: false } } });
+  await assert.rejects(order('9876500004'), /STORE_CLOSED/);
+  await call('/t/branches', { id: branch.id, settings: { ...branch.settings, store: { open: true, min_order: 1e6 } } });
+  await assert.rejects(order('9876500004'), /MIN_ORDER/);
+});
+
+test('Inbox: reviews need approval (verified buyer flagged), restock requests dedupe, refunds tracked on prepaid cancels', async () => {
+  const anon = rpc('anon', null);
+  const online = (await pg.query('select online_branch_id id from shop_config')).rows[0].id;
+  const br = (await call('/t/branches')).find((x) => x.id === online);
+  await call('/t/branches', { id: br.id, settings: { ...br.settings, store: {} } }); // previous test left a huge minimum order
+  const item = (await call('/items')).find((i) => i.stock > 1 && i.online);
+  const review = (phone, extra = {}) => anon('submit_feedback', { p: { kind: 'review', item_id: item.id, name: 'Kiran Kumar', phone, rating: 5, body: 'Great taste, mixes well.', ...extra } });
+  await assert.rejects(review('123'), /INVALID_PHONE/);
+  await assert.rejects(review('9876511111', { rating: 9 }), /BAD_RATING/);
+  await assert.rejects(review('9876511111', { body: 'ok' }), /REVIEW_TOO_SHORT/);
+
+  // a delivered order makes the reviewer a verified buyer
+  const placed = await anon('place_order', { p: { name: 'Kiran Kumar', phone: '9876511111', payment_method: 'online', items: [{ item_id: item.id, qty: 1 }],
+    address: { line1: '12 MG Road', city: 'Vijayawada', state: 'Andhra Pradesh', pincode: '520010' } } });
+  await pg.query("update orders set status = 'delivered', payment_status = 'paid' where id = $1", [placed.id]);
+  const r = await review('9876511111');
+  assert.equal((await pg.query('select verified, status from feedback where id = $1', [r.id])).rows[0].verified, true);
+  assert.equal((await pg.query('select count(*)::int n from shop_reviews')).rows[0].n, 0, 'hidden until approved');
+  await call('/sync/now', {});
+  await call('/t/feedback', { id: r.id, status: 'approved', reply: 'Thank you!' });
+  const shown = (await pg.query('select name, rating, reply, verified from shop_reviews')).rows;
+  assert.deepEqual(shown, [{ name: 'Kiran', rating: 5, reply: 'Thank you!', verified: true }], 'first name only, no phone');
+
+  const a = await anon('submit_feedback', { p: { kind: 'restock', item_id: item.id, name: 'Asha', phone: '9000000077' } });
+  const b = await anon('submit_feedback', { p: { kind: 'restock', item_id: item.id, name: 'Asha', phone: '9000000077' } });
+  assert.equal(a.id, b.id, 'same request not stored twice');
+  await anon('submit_feedback', { p: { kind: 'message', name: 'Asha', phone: '9000000077', body: 'Do you have vegan protein?' } });
+  for (let i = 0; i < 10; i++) await anon('submit_feedback', { p: { kind: 'message', name: 'Spam', phone: '9000000088', body: 'hello ' + i } });
+  await assert.rejects(anon('submit_feedback', { p: { kind: 'message', name: 'Spam', phone: '9000000088', body: 'hello 10' } }), /TOO_MANY/);
+
+  // prepaid order cancelled → refund pending → refunded; internal note kept
+  const p2 = await anon('place_order', { p: { name: 'Refund Me', phone: '9876522222', payment_method: 'online', items: [{ item_id: item.id, qty: 1 }],
+    address: { line1: '12 MG Road', city: 'Vijayawada', state: 'Andhra Pradesh', pincode: '520010' } } });
+  await pg.query("update orders set status = 'placed', payment_status = 'paid' where id = $1", [p2.id]);
+  await call('/sync/now', {});
+  await call(`/orders/${p2.id}`, { status: 'cancelled', internal_note: 'Customer changed mind' });
+  let o = (await call('/orders')).find((x) => x.id === p2.id);
+  assert.deepEqual([o.payment_status, o.internal_note], ['refund_pending', 'Customer changed mind']);
+  await call(`/orders/${p2.id}`, { refund: 'done' });
+  o = (await call('/orders')).find((x) => x.id === p2.id);
+  assert.equal(o.payment_status, 'refunded');
 });

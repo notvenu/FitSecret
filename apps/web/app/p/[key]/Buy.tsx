@@ -6,11 +6,12 @@ import { inr } from '@fitsecret/shared';
 import type { Product } from '@/lib/catalog';
 import { useCart } from '@/components/cart';
 import ProductShot from '@/components/ProductShot';
+import { NotifyMe, Stars } from '@/components/Feedback';
 
 const pct = (mrp: number, p: number) => (mrp > p ? Math.round(((mrp - p) / mrp) * 100) : 0);
 const rupees = (n: number) => inr(n).replace('.00', '');
 
-export default function Buy({ p, initial }: { p: Product; initial?: string }) {
+export default function Buy({ p, initial, rating }: { p: Product; initial?: string; rating: { avg: number; count: number } | null }) {
   const { add } = useCart();
   const router = useRouter();
   const start = p.variants.find((v) => v.id === initial) || p.variants.find((v) => v.stock > 0) || p.variants[0];
@@ -40,6 +41,7 @@ export default function Buy({ p, initial }: { p: Product; initial?: string }) {
       <div>
         <div className="text-sm font-semibold uppercase tracking-wide text-mute">{p.brand}</div>
         <h1 className="display mt-2 text-[clamp(2.4rem,5vw,4.2rem)]">{p.name.replace(p.brand, '').trim()}</h1>
+        {rating && <a href="#reviews" className="mt-2 inline-flex items-center gap-2 text-sm text-mute hover:text-ink"><Stars n={rating.avg} /> {rating.avg.toFixed(1)} · {rating.count} review{rating.count > 1 ? 's' : ''}</a>}
         <div className="mt-6 flex flex-wrap items-baseline gap-x-3">
           <span className="text-4xl font-bold tabular-nums">{rupees(v.price)}</span>
           {off > 0 && <><span className="text-lg text-mute line-through tabular-nums">{rupees(v.mrp)}</span><span className="font-semibold text-brand-deep">Save {off}%</span></>}
@@ -74,6 +76,7 @@ export default function Buy({ p, initial }: { p: Product; initial?: string }) {
           <button disabled={v.stock <= 0} onClick={() => add(line, qty)} className="btn-ink h-12 flex-1 px-6">Add to cart</button>
           <button disabled={v.stock <= 0} onClick={() => { add(line, qty, false); router.push('/checkout'); }} className="btn-brand h-12 flex-1 px-6">Buy now</button>
         </div>
+        {v.stock <= 0 && <NotifyMe key={v.id} itemId={v.id} label={[p.name, v.size, v.flavour].filter(Boolean).join(' ')} />}
       </div>
     </div>
   );

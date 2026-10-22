@@ -2,7 +2,8 @@ import { notFound } from 'next/navigation';
 import Link from 'next/link';
 import type { Metadata } from 'next';
 import { GOALS } from '@fitsecret/shared';
-import { getProduct, getProducts } from '@/lib/catalog';
+import { getProduct, getProducts, getReviews } from '@/lib/catalog';
+import { ReviewForm, Stars } from '@/components/Feedback';
 import ProductCard from '@/components/ProductCard';
 import Buy from './Buy';
 
@@ -24,10 +25,13 @@ export default async function ProductPage({ params, searchParams }: { params: Pr
   const [{ key }, { v }] = await Promise.all([params, searchParams]);
   const p = await getProduct(key);
   if (!p) notFound();
+  const reviews = await getReviews(p.key);
+  const avg = reviews.length ? reviews.reduce((s, r) => s + r.rating, 0) / reviews.length : 0;
   const related = (await getProducts()).filter((x) => x.key !== p.key && x.inStock && (p.subSlug ? x.subSlug === p.subSlug : x.categorySlug === p.categorySlug)).slice(0, 4);
   const jsonLd = {
     '@context': 'https://schema.org', '@type': 'Product', name: p.name, brand: { '@type': 'Brand', name: p.brand }, description: p.description,
     offers: p.variants.map((x) => ({ '@type': 'Offer', priceCurrency: 'INR', price: x.price, sku: x.id, availability: `https://schema.org/${x.stock > 0 ? 'InStock' : 'OutOfStock'}` })),
+    ...(reviews.length && { aggregateRating: { '@type': 'AggregateRating', ratingValue: avg.toFixed(1), reviewCount: reviews.length } }),
   };
 
   return (
@@ -37,7 +41,7 @@ export default async function ProductPage({ params, searchParams }: { params: Pr
         <Link href="/shop" className="hover:text-ink">Shop</Link> <span className="mx-1">/</span> <Link href={`/shop?category=${p.categorySlug}`} className="hover:text-ink">{p.category}</Link>
         {p.subSlug && <> <span className="mx-1">/</span> <Link href={`/shop?category=${p.categorySlug}&sub=${p.subSlug}`} className="hover:text-ink">{p.sub}</Link></>}
       </nav>
-      <Buy p={p} initial={v} />
+      <Buy p={p} initial={v} rating={reviews.length ? { avg, count: reviews.length } : null} />
 
       <section className="mt-20 grid gap-12 border-t border-line pt-12 md:grid-cols-[1.4fr_1fr]">
         <div>
@@ -55,6 +59,29 @@ export default async function ProductPage({ params, searchParams }: { params: Pr
             </div>
           ))}
         </dl>
+      </section>
+
+      <section id="reviews" className="mt-20 border-t border-line pt-12">
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <div>
+            <h2 className="display text-4xl">Reviews</h2>
+            {reviews.length > 0 && <p className="mt-2 flex items-center gap-2 text-mute"><Stars n={avg} size={20} /> <b className="text-ink">{avg.toFixed(1)}</b> from {reviews.length} review{reviews.length > 1 ? 's' : ''}</p>}
+          </div>
+          <ReviewForm itemId={p.variants[0].id} />
+        </div>
+        {reviews.length ? (
+          <ul className="mt-8 grid gap-4 md:grid-cols-2">
+            {reviews.map((r) => (
+              <li key={r.id} className="rounded-[var(--radius-card)] border border-line p-5">
+                <div className="flex items-center justify-between gap-2"><Stars n={r.rating} /><span className="text-xs text-mute">{new Date(r.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</span></div>
+                {r.title && <div className="mt-2 font-semibold">{r.title}</div>}
+                {r.body && <p className="mt-1 leading-relaxed text-ink-soft">{r.body}</p>}
+                <div className="mt-3 text-sm text-mute">{r.name}{r.verified && <span className="ml-2 rounded-full bg-brand/20 px-2 py-0.5 text-xs font-semibold text-brand-deep">Verified buyer</span>}</div>
+                {r.reply && <p className="mt-3 rounded-lg bg-surface p-3 text-sm"><b>Fit Secrets:</b> {r.reply}</p>}
+              </li>
+            ))}
+          </ul>
+        ) : <p className="mt-4 text-mute">No reviews yet. Bought this? Tell others what you think.</p>}
       </section>
 
       {related.length > 0 && (

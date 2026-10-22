@@ -4,11 +4,12 @@ import { motion, useReducedMotion } from 'motion/react';
 import { CheckCircle, Package, Truck, HouseLine, Receipt, ClipboardText, MapPin, ArrowSquareOut, CircleNotch, XCircle } from '@phosphor-icons/react';
 import { inr, ORDER_FLOW, ORDER_LABEL } from '@fitsecret/shared';
 import { supabase } from '@/lib/supabase';
+import type { Tracking } from '@fitsecret/shared/couriers';
 import { payOnline, onlinePayments } from '@/lib/pay';
 
 type Track = {
   order: { id: string; order_no: string; name: string; phone: string; email: string | null; status: string; payment_method: string; payment_status: string;
-    subtotal: number; shipping: number; total: number; courier: string | null; awb: string | null; tracking_url: string | null; address: Record<string, string>; created_at: string };
+    subtotal: number; shipping: number; discount: number; coupon: string | null; total: number; courier: string | null; awb: string | null; tracking_url: string | null; address: Record<string, string>; created_at: string };
   lines: { name: string; variant: string; qty: number; total: number }[];
   events: { status: string; note: string | null; at: string }[];
 };
@@ -21,6 +22,7 @@ export default function Tracker({ no: initNo, phone: initPhone, fresh }: { no: s
   const [t, setT] = useState<Track | null>(null);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
+  const [live, setLive] = useState<Tracking | null>(null);
   const reduce = useReducedMotion();
   const sb = supabase();
 
@@ -31,6 +33,9 @@ export default function Tracker({ no: initNo, phone: initPhone, fresh }: { no: s
     setBusy(false);
     if (error || !data) { setT(null); setErr('No order found. Check the order number and the mobile number used at checkout.'); return; }
     setT(data as Track);
+    // live courier scans (Shiprocket / Delhivery) once the parcel has an AWB
+    setLive(null);
+    if ((data as Track).order.awb) fetch(`/api/shipment?no=${encodeURIComponent(n)}&phone=${encodeURIComponent(p)}`).then((r) => r.json()).then((j) => setLive(j.tracking || null), () => {});
   }, [sb, no, phone]);
 
   useEffect(() => { if (initNo && initPhone) lookup(initNo, initPhone); }, [initNo, initPhone]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -129,6 +134,7 @@ export default function Tracker({ no: initNo, phone: initPhone, fresh }: { no: s
                 {t!.lines.map((l, i) => <li key={i} className="flex justify-between gap-3"><span>{l.qty} × {l.name}<span className="block text-xs text-mute">{l.variant}</span></span><span className="tabular-nums">{inr(l.total)}</span></li>)}
               </ul>
               <dl className="mt-4 space-y-1 border-t border-line pt-4">
+                {Number(o.discount) > 0 && <div className="flex justify-between text-brand-deep"><dt>Coupon {o.coupon}</dt><dd>−{inr(o.discount)}</dd></div>}
                 <div className="flex justify-between text-mute"><dt>Delivery</dt><dd>{Number(o.shipping) ? inr(o.shipping) : 'Free'}</dd></div>
                 <div className="flex justify-between text-base font-bold"><dt>Total</dt><dd className="tabular-nums">{inr(o.total)}</dd></div>
               </dl>
@@ -138,8 +144,57 @@ export default function Tracker({ no: initNo, phone: initPhone, fresh }: { no: s
               <p className="leading-relaxed text-mute">{o.name}<br />{o.address.line1}{o.address.line2 && `, ${o.address.line2}`}<br />{o.address.city}, {o.address.state} {o.address.pincode}</p>
             </div>
           </aside>
+          {live && <LiveTracking t={live} courier={o.courier} />}
         </div>
       )}
     </div>
+  );
+}
+
+const STEPS: [Tracking['status'], string][] = [['booked', 'Booked'], ['picked_up', 'Picked up'], ['in_transit', 'In transit'], ['out_for_delivery', 'Out for delivery'], ['delivered', 'Delivered']];
+const longDay = (d: string) => new Date(d + 'T12:00:00').toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'short' });
+
+// Live courier scans. Sits under the order timeline on small screens, beside it on desktop.
+function LiveTracking({ t, courier }: { t: Tracking; courier: string | null }) {
+  const [all, setAll] = useState(false);
+  const idx = STEPS.findIndex(([k]) => k === t.status);
+  const bad = t.status === 'failed' || t.status === 'rto';
+  return (
+    <section className="rounded-[var(--radius-card)] border border-line p-6 md:col-span-2 md:p-8">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <div className="flex items-center gap-2 text-sm text-mute"><span className="relative flex h-2.5 w-2.5"><span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-brand opacity-75" /><span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-brand" /></span>
+            Live from {t.courier && t.courier !== courier ? `${courier} · ${t.courier}` : courier} · AWB <span className="font-mono">{t.awb}</span></div>
+          <div className={`mt-1 display text-2xl ${bad ? 'text-danger' : ''}`}>{t.label}</div>
+          {t.current && t.current.toLowerCase() !== t.label.toLowerCase() && <div className="text-sm text-mute">{t.current}</div>}
+          {t.note && <div className="text-sm text-mute">{t.note}</div>}
+        </div>
+        <div className="text-right text-sm">
+          {t.status === 'delivered' ? t.delivered_at && <div>Delivered {when(t.delivered_at)}</div>
+            : t.edd && <><div className="text-mute">Expected delivery</div><div className="display text-xl">{longDay(t.edd)}</div></>}
+          {t.url && <a href={t.url} target="_blank" rel="noreferrer" className="mt-1 inline-flex items-center gap-1 text-brand-deep hover:underline">Courier page <ArrowSquareOut size={14} /></a>}
+        </div>
+      </div>
+      {!bad && (
+        <div className="mt-6 grid grid-cols-5 gap-1.5">
+          {STEPS.map(([k, l], i) => (
+            <div key={k}><div className={`h-1.5 rounded-full ${i <= idx ? 'bg-brand' : 'bg-surface-2'}`} /><div className={`mt-1.5 text-[11px] ${i <= idx ? 'font-semibold' : 'text-mute'}`}>{l}</div></div>
+          ))}
+        </div>
+      )}
+      {(t.origin || t.destination) && <p className="mt-4 text-sm text-mute">{t.origin} → {t.destination}</p>}
+      {t.events.length > 0 && (
+        <ol className="mt-6 space-y-4 border-l-2 border-line pl-5">
+          {(all ? t.events : t.events.slice(0, 5)).map((e, i) => (
+            <li key={i} className="relative text-sm">
+              <span className={`absolute -left-[27px] top-1 h-3 w-3 rounded-full border-2 border-white ${i === 0 ? 'bg-brand' : 'bg-line'}`} />
+              <div className={i === 0 ? 'font-semibold' : ''}>{e.status}</div>
+              <div className="text-xs text-mute">{[e.at && when(e.at), e.location, e.detail !== e.status && e.detail].filter(Boolean).join(' · ')}</div>
+            </li>
+          ))}
+        </ol>
+      )}
+      {t.events.length > 5 && <button onClick={() => setAll(!all)} className="mt-4 text-sm font-semibold text-brand-deep hover:underline">{all ? 'Show less' : `Show all ${t.events.length} updates`}</button>}
+    </section>
   );
 }

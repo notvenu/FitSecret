@@ -3,12 +3,14 @@ import { STATE_LIST } from '@fitsecret/shared';
 import { api, useApi, toast, fail } from '../api.js';
 import { CLOUD } from '@backend';
 import { Btn, Field, Page, Table, Badge, useForm } from '../ui.jsx';
+import { TYPE_LABEL } from './Invoices.jsx';
 
 export default function Settings({ boot, reload }) {
   return (
     <Page title="Settings">
       <div className="grid gap-4 lg:grid-cols-2">
         <Branch b={boot.branch} reload={reload} />
+        <InvoiceSettings b={boot.branch} reload={reload} />
         {!CLOUD && <Sync />}
         {!CLOUD && <Users />}
         <Device />
@@ -35,6 +37,66 @@ function Branch({ b, reload }) {
         <Field label="State"><select className="input" {...bind('state_code')}>{STATE_LIST.map(([c, n]) => <option key={c} value={c}>{n}</option>)}</select></Field>
         <Field label="Invoice code" value={f.code} disabled hint="Fixed once invoices exist" />
         <Btn v="primary" type="submit" className="col-span-2">Save</Btn>
+      </form>
+    </Card>
+  );
+}
+
+// Vyapar's Settings → Transaction / Print / Item toggles that matter for a retail counter. Stored in branches.settings.invoice.
+export const INVOICE_DEFAULTS = { words: true, saved: true, upi: '', bank: '', terms: '100% authentic products · Goods once sold can be exchanged within 7 days with bill (sealed packs only)', footer: 'Thank you! Stay fit 💪', block_negative: false, theme: 'classic' };
+const THEMES = [['classic', 'Classic'], ['tally', 'Tally (boxed grid)'], ['modern', 'Modern (brand header)']];
+const fmtCur = (cs) => (cs || []).map((c) => `${c.code} ${c.rate}`).join(', ');
+function InvoiceSettings({ b, reload }) {
+  const s = b.settings || {};
+  const [f, set, bind] = useForm({ ...INVOICE_DEFAULTS, ...s.invoice, currencies: fmtCur(s.invoice?.currencies) });
+  const [prefixes, setPrefixes] = useState(s.prefixes || {});
+  const [fields, setFields] = useState([...(s.party_fields || []), '', '', '', ''].slice(0, 4));
+  const save = async (e) => {
+    e.preventDefault();
+    if (f.upi && !/^[\w.-]+@[\w.-]+$/.test(f.upi.trim())) return toast('UPI ID looks wrong (like shopname@okhdfcbank)', 'err');
+    // "USD 83.2, AED 22.6" → [{ code, rate }]
+    const currencies = String(f.currencies || '').split(',').map((x) => x.trim().split(/\s+/)).filter(([c]) => c)
+      .map(([code, rate]) => ({ code: code.toUpperCase().slice(0, 3), rate: +rate }));
+    if (currencies.some((c) => !(c.rate > 0) || c.code.length !== 3)) return toast('Currencies look like: USD 83.2, AED 22.6', 'err');
+    const bad = Object.values(prefixes).find((p) => p && !/^[A-Za-z0-9-]{1,12}$/.test(p));
+    if (bad) return toast(`Prefix "${bad}": letters, numbers and - only`, 'err');
+    try {
+      await api('/t/branches', { id: b.id, settings: { ...s, invoice: { ...f, upi: f.upi.trim(), currencies },
+        prefixes: Object.fromEntries(Object.entries(prefixes).filter(([, v]) => v).map(([k, v]) => [k, v.toUpperCase()])), party_fields: fields.map((x) => x.trim()).filter(Boolean) } });
+      toast('Invoice settings saved'); reload();
+    } catch (e) { fail(e); }
+  };
+  const tick = (k, label, hint) => (
+    <label className="flex items-start gap-2.5 text-sm"><input type="checkbox" className="mt-0.5 h-4 w-4 accent-[var(--color-brand-d)]" checked={!!f[k]} onChange={(e) => set(k, e.target.checked)} />
+      <span>{label}{hint && <span className="block text-xs text-black/45">{hint}</span>}</span></label>
+  );
+  return (
+    <Card title="Invoice, print & billing">
+      <form onSubmit={save} className="grid gap-3">
+        <Field label="UPI ID for payment QR" {...bind('upi')} placeholder="fitsecret@okhdfcbank" hint="Prints a scan-to-pay QR with the exact amount due" />
+        <Field label="Bank details on A4 invoice"><textarea className="input" rows={2} {...bind('bank')} placeholder="Bank, A/c no, IFSC" /></Field>
+        <Field label="Terms & conditions"><textarea className="input" rows={2} {...bind('terms')} /></Field>
+        <Field label="Footer line" {...bind('footer')} />
+        {tick('words', 'Amount in words', 'Rupees Four Hundred Twenty Only')}
+        {tick('saved', '"You saved" against MRP on receipts')}
+        {tick('block_negative', 'Stop sale on negative stock', 'Sale bills cannot take an item below zero')}
+        <Field label="A4 invoice layout"><select className="input" {...bind('theme')}>{THEMES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></Field>
+        <h3 className="mt-2 text-sm font-semibold">More transaction features</h3>
+        {tick('serials', 'Serial no. / IMEI on bill lines')}
+        {tick('mfg', 'Manufacturing date on purchase batches', 'Printed on invoices next to expiry')}
+        {tick('tcs', 'TCS on invoices', 'Adds a TCS % box to bills; see Reports → Taxes')}
+        <Field label="Foreign currencies" {...bind('currencies')} placeholder="USD 83.2, AED 22.6" hint="Bills stay in ₹; the invoice also shows the amount in the chosen currency" />
+        <h3 className="mt-2 text-sm font-semibold">Invoice number prefixes</h3>
+        <p className="-mt-2 text-xs text-black/45">Blank = default ({b.code}-XX). Numbering restarts every financial year: PREFIX/26-27/0001</p>
+        <div className="grid grid-cols-2 gap-2">
+          {Object.entries(TYPE_LABEL).map(([t, l]) => <Field key={t} label={l} value={prefixes[t] || ''} onChange={(e) => setPrefixes({ ...prefixes, [t]: e.target.value })} />)}
+        </div>
+        <h3 className="mt-2 text-sm font-semibold">Party custom fields</h3>
+        <div className="grid grid-cols-2 gap-2">
+          {fields.map((x, i) => <Field key={i} label={`Field ${i + 1} name`} value={x} placeholder={['Date of birth', 'Gym', 'Trainer', 'Goal'][i]}
+            onChange={(e) => setFields(fields.map((y, j) => (j === i ? e.target.value : y)))} />)}
+        </div>
+        <Btn v="primary" type="submit">Save</Btn>
       </form>
     </Card>
   );
