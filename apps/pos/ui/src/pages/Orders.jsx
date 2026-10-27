@@ -2,7 +2,8 @@ import { useState } from 'react';
 import { ORDER_FLOW, ORDER_LABEL, inr } from '@fitsecret/shared';
 import { COURIERS, providerFor } from '@fitsecret/shared/couriers';
 import { api, useApi, toast, fail } from '../api.js';
-import { Btn, Field, Page, Badge, Money, Loading, cx } from '../ui.jsx';
+import { CLOUD } from '@backend';
+import { Btn, Field, Badge, Money, Loading, SideNav, SectionPage, cx } from '../ui.jsx';
 
 export const ORDER_C = { pending_payment: 'grey', placed: 'red', confirmed: 'amber', packed: 'amber', shipped: 'blue', out_for_delivery: 'blue', delivered: 'green', cancelled: 'grey' };
 const C = ORDER_C;
@@ -39,12 +40,13 @@ export default function Orders({ boot, list: shared, siteUrl }) {
     setSel(new Set()); list.reload();
   };
   return (
-    <Page title="Website orders" actions={!shared && <Btn onClick={() => api('/sync/now', {}).then(list.reload, fail)}>↻ Fetch new orders</Btn>}>
+    <SectionPage title={s ? `Search: ${q}` : FILTERS.find(([k]) => k === status)?.[1] === 'All' ? 'All orders' : `${FILTERS.find(([k]) => k === status)?.[1]} orders`}
+      nav={<SideNav title="Orders" value={status || 'all'} onChange={(k) => { setStatus(k === 'all' ? '' : k); setQ(''); setSel(new Set()); }}
+        groups={[{ items: FILTERS.map(([k, l]) => ({ key: k || 'all', label: k ? l : 'All orders', badge: n(k) || undefined })) }]} />}
+      actions={!shared && <Btn onClick={() => api('/sync/now', {}).then(list.reload, fail)}>↻ Fetch new orders</Btn>}>
       {!boot.sync.configured && <div className="mb-3 rounded-[14px] bg-amber-50 p-3 text-sm text-amber-900">Cloud sync is off — website orders arrive here once Supabase is connected in Settings.</div>}
       <div className="mb-4 flex flex-wrap items-center gap-1.5">
         <input className="input mr-2 max-w-64" placeholder="Search order no, name, phone, AWB" value={q} onChange={(e) => setQ(e.target.value)} />
-        {FILTERS.map(([k, l]) => <button key={k} onClick={() => { setStatus(k); setQ(''); setSel(new Set()); }} className={cx('rounded-full px-3 py-1 text-xs font-medium', !s && status === k ? 'bg-ink text-white' : 'bg-black/5')}>
-          {l} <span className={cx(['placed', 'refund'].includes(k) && n(k) ? 'font-bold text-red-500' : 'opacity-60')}>{n(k)}</span></button>)}
         {rows?.length > 0 && <button className="ml-auto text-xs font-semibold text-brand-d hover:underline" onClick={() => setSel(sel.size ? new Set() : new Set(rows.map((o) => o.id)))}>{sel.size ? 'Clear selection' : `Select all ${rows.length}`}</button>}
       </div>
       {sel.size > 0 && (
@@ -59,7 +61,7 @@ export default function Orders({ boot, list: shared, siteUrl }) {
         <div className="grid gap-3 xl:grid-cols-2">{rows.map((o) => <OrderCard key={o.id + o.updated_at} o={o} onChange={list.reload} picked={sel.has(o.id)} onPick={() => toggle(o.id)} siteUrl={siteUrl} />)}</div>
       )}
       <datalist id="couriers">{COURIERS.map((c) => <option key={c} value={c} />)}</datalist>
-    </Page>
+    </SectionPage>
   );
 }
 
@@ -140,7 +142,7 @@ function OrderCard({ o, onChange, picked, onPick, siteUrl }) {
       <div className="flex flex-wrap gap-2">
         {next && o.status !== 'cancelled' && o.status !== 'pending_payment' && <Btn v="brand" onClick={advance}>Mark {ORDER_LABEL[next]}</Btn>}
         {['shipped', 'out_for_delivery'].includes(o.status) && <Btn onClick={() => update(withUrl())}>Save tracking</Btn>}
-        {o.status !== 'cancelled' && <Btn onClick={invoice}>{o.invoice_id ? 'Print invoice' : 'Generate invoice'}</Btn>}
+        {o.status !== 'cancelled' && !CLOUD && <Btn onClick={invoice}>{o.invoice_id ? 'Print invoice' : 'Generate invoice'}</Btn>} {/* bills are made by the POS counter */}
         {o.status !== 'cancelled' && <Btn v="ghost" onClick={() => printOrders('slips', [o.id])}>Packing slip</Btn>}
         {o.status !== 'cancelled' && <Btn v="ghost" onClick={() => printOrders('labels', [o.id])}>Label</Btn>}
         {!['delivered', 'cancelled', 'shipped', 'out_for_delivery'].includes(o.status) && (

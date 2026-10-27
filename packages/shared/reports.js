@@ -1,7 +1,11 @@
 // Vyapar-style reports, written once over plain rows so the POS server (SQLite) and /admin (Supabase replica) give identical numbers.
 // rows(t) must return the live (deleted = false) rows of a synced table in wire format.
 // ponytail: every report scans the whole table in memory; fine for one shop's volume, move to SQL per report if it gets slow.
-import { round2 } from './index.js';
+import { round2, today, addDays } from './index.js';
+import { gstr1Json } from './gstjson.js';
+import { insights } from './insights.js';
+import { expiryOffers } from './offers.js';
+import { locationSummary, stockMatrix, transferList, restockPlan, salesByBranch } from './locations.js';
 
 const sum = (a, f) => round2(a.reduce((s, x) => s + (Number(f(x)) || 0), 0));
 const group = (a, key) => { const m = new Map(); for (const x of a) { const k = key(x); (m.get(k) || m.set(k, []).get(k)).push(x); } return m; };
@@ -29,7 +33,45 @@ function load(rows, branch) {
     payments: rows('payments').filter((p) => p.branch_id === branch),
     expenses: rows('expenses').filter((e) => e.branch_id === branch),
     moves: rows('stock_movements').filter((m) => m.branch_id === branch),
+    employees: (rows('employees') || []).filter((e) => e.branch_id === branch),
+    attendance: (rows('attendance') || []).filter((a) => a.branch_id === branch),
+    closes: (rows('day_closes') || []).filter((c) => c.branch_id === branch),
+    audit: (rows('audit_log') || []).filter((a) => a.branch_id === branch),
+    orders: (rows('orders') || []).filter((o) => o.branch_id === branch),
+    offers: rows('offers') || [],
   };
+}
+
+// Home page reminders. Money: each party's balance is laid on its newest unpaid bills (on-account payments settle the oldest first);
+// a bill is due on its due date, or on the bill date when it has none. Shows what is overdue or due within 7 days.
+export function reminders(d, certs = [], now = today()) {
+  const soon = addDays(now, 7), dues = { sale: [], purchase: [] };
+  const days = (a) => Math.round((new Date(now) - new Date(a)) / 864e5);
+  for (const p of partyBalances(d)) {
+    const kind = p.balance > 0.5 ? 'sale' : p.balance < -0.5 ? 'purchase' : null;
+    if (!kind) continue;
+    let left = Math.abs(p.balance);
+    const bills = d.money.filter((i) => i.party_id === p.id && i.type === kind).sort(byDate).reverse();
+    const row = (no, date, due_on, amount) => ({ party_id: p.id, name: p.name, phone: p.phone || '', no, date, due_on, days: days(due_on), amount });
+    for (const b of bills) {
+      if (left <= 0.5) break;
+      const amount = round2(Math.min(left, b.total - (b.paid || 0))); // never more than is still unpaid on that bill
+      if (amount <= 0.5) continue;
+      left = round2(left - amount);
+      dues[kind].push(row(b.no, b.date, b.due_date || b.date, amount));
+    }
+    if (left > 0.5) dues[kind].push(row('Opening balance', '', '0000-01-01', left));
+  }
+  const pick = (a) => a.filter((r) => r.due_on <= soon).map((r) => (r.due_on === '0000-01-01' ? { ...r, due_on: '', days: null } : r))
+    .sort((x, y) => (y.days ?? 9999) - (x.days ?? 9999) || y.amount - x.amount);
+  const other = [];
+  const exp = certs.filter((c) => c.valid_until && c.valid_until <= addDays(now, 30));
+  if (exp.length) other.push({ id: 'certs', level: exp.some((c) => c.valid_until < now) ? 'bad' : 'warn', title: `${exp.length} lab report${exp.length > 1 ? 's' : ''} expired or expiring in 30 days`,
+    detail: exp.slice(0, 3).map((c) => `${d.items.get(c.item_id)?.name || 'Item'} (${c.valid_until})`).join(', '), href: '#/items' });
+  const y = addDays(now, -1);
+  if (d.invoices.some((i) => i.date === y && i.type === 'sale') && !d.closes.some((c) => c.date === y))
+    other.push({ id: 'close', level: 'warn', title: "Yesterday's day close wasn't done", detail: 'Count the drawer against the books so cash differences are caught.', href: '#/dayclose' });
+  return { collect: pick(dues.sale), pay: pick(dues.purchase), other };
 }
 
 export function partyBalances(d, to = '9999') {
@@ -40,18 +82,36 @@ export function partyBalances(d, to = '9999') {
 }
 
 // Money in/out per payment mode: payments (incl. cash adjustments with no party), expenses and journal lines on a mode.
-// Loyalty points redeemed are recorded as payments in mode 'points' but are not money, so they stay out.
+// Loyalty points and exchange credit are recorded as payments in modes 'points' / 'exchange' but are not money, so they stay out.
+export const NOT_MONEY = ['points', 'exchange'];
+// What a bank account is used for (Cash & Bank → bank account). One account per use. Money in of the first three kinds is
+// counted in that account; the rest pick it by default (Payment-Out, Expenses, salaries, cheque deposit / clearing).
+export const BANK_USES = [
+  ['in', 'takes_upi', 'UPI payments', 'GPay, PhonePe, Paytm, QR', 'UPI'], ['in', 'takes_card', 'Card machine settlements', 'Card payments land here', 'card'],
+  ['in', 'takes_bank', 'Bank transfers from customers', 'NEFT / IMPS / RTGS paid as “Bank”', 'bank transfers in'], ['in', 'cheque_in', 'Cheques you receive', 'Deposited into this account', 'cheques received'],
+  ['out', 'pays_suppliers', 'Paying suppliers', 'Payment-Out starts with this account', 'suppliers'], ['out', 'pays_expenses', 'Shop expenses', 'Rent, electricity, etc.', 'expenses'],
+  ['out', 'pays_salary', 'Salaries', 'Paying staff starts with this account', 'salaries'], ['out', 'cheque_out', 'Cheques you give', 'Your cheque book is for this account', 'cheques given'],
+];
+export const bankFor = (settings, use) => { const b = (settings?.banks || []).find((x) => !x.closed && x[use]); return b ? 'bank:' + b.id : null; };
+export const settleTo = (settings) => {
+  const to = { upi: bankFor(settings, 'takes_upi'), card: bankFor(settings, 'takes_card'), bank: bankFor(settings, 'takes_bank') };
+  return (m) => to[m] || m;
+};
+const VIA = { upi: ' · UPI', card: ' · card', bank: ' · bank transfer' };
 function cashRows(d) {
-  const inv = new Map(d.invoices.map((i) => [i.id, i]));
+  const inv = new Map(d.invoices.map((i) => [i.id, i])), to = settleTo(d.settings);
   return [
+    ...(d.settings.banks || []).filter((b) => +b.opening).map((b) => ({ date: b.opening_date || '0000-00-00', created_at: '', mode: 'bank:' + b.id, type: 'opening balance', ref: '', in: +b.opening, out: 0 })),
     ...d.jlines.filter((l) => String(l.account).startsWith('mode:')).map((l) => ({ date: l.date, created_at: l.created_at, mode: l.account.slice(5), type: 'journal',
       ref: [l.no, l.note].filter(Boolean).join(' · '), in: l.debit, out: l.credit })),
-    ...d.payments.filter((y) => y.mode !== 'points').map((y) => {
+    ...d.payments.filter((y) => !NOT_MONEY.includes(y.mode)).map((y) => {
       const i = inv.get(y.invoice_id);
-      return { date: y.date, created_at: y.created_at, mode: y.mode || 'cash', type: i ? i.type.replace(/_/g, ' ') : y.party_id ? `payment ${y.direction}` : 'adjustment',
-        ref: i ? `${i.no}${i.party_id ? '' : ` · ${i.party_name}`}` : y.note || '', party_id: y.party_id, in: y.direction === 'in' ? y.amount : 0, out: y.direction === 'out' ? y.amount : 0 };
+      const m = y.mode || 'cash', via = to(m) !== m ? VIA[m] : '';
+      return { date: y.date, created_at: y.created_at, mode: to(m), type: (i ? i.type.replace(/_/g, ' ') : y.party_id ? `payment ${y.direction}` : 'adjustment') + via,
+        ref: i ? `${i.no}${i.party_id ? '' : ` · ${i.party_name}`}` : y.note || '', party_id: y.party_id, in: y.direction === 'in' ? y.amount : 0, out: y.direction === 'out' ? y.amount : 0,
+        id: y.id, reconciled: y.reconciled || null };
     }),
-    ...d.expenses.map((e) => ({ date: e.date, created_at: e.created_at, mode: e.mode || 'cash', type: 'expense', ref: [e.category, e.note].filter(Boolean).join(' · '), in: 0, out: e.amount })),
+    ...d.expenses.map((e) => ({ date: e.date, created_at: e.created_at, mode: to(e.mode || 'cash'), type: 'expense', ref: [e.category, e.note].filter(Boolean).join(' · '), in: 0, out: e.amount })),
   ].sort(byDate);
 }
 
@@ -67,6 +127,10 @@ export const ACCOUNT_TYPES = {
   current_liability: ['Current Liabilities', 'liability'], income: ['Indirect Income', 'income'], expense: ['Indirect Expenses', 'expense'],
 };
 export const MODE_NAMES = { cash: 'Cash in hand', upi: 'UPI', card: 'Card / POS machine', bank: 'Bank', cheque: 'Cheques' };
+// Named bank accounts (Cash & Bank → Bank Accounts, kept in branch settings.banks) are payment modes too: 'bank:<id>'.
+export const modeName = (mode, settings) => MODE_NAMES[mode] || (settings?.banks || []).find((b) => 'bank:' + b.id === mode)?.name || mode;
+// Modes money can be received in / paid from, for the pickers: the fixed ones plus every open bank account.
+export const payModes = (settings) => ['cash', 'upi', 'card', 'bank', ...(settings?.banks || []).filter((b) => !b.closed).map((b) => 'bank:' + b.id)];
 const DEBIT_SIDE = ['asset', 'expense'];
 // Balance on the account's natural side (debit for assets/expenses, credit for the rest).
 export function accountBalance(a, jlines, to = '9999') {
@@ -78,7 +142,7 @@ export function accountBalance(a, jlines, to = '9999') {
 function ledgers(d, to = '9999') {
   const L = [];
   const add = (side, grp, name, amount, key) => amount && L.push({ side, group: grp, name, amount: round2(amount), key });
-  for (const [mode, rs] of group(cashRows(d).filter((r) => r.date <= to), (r) => r.mode)) add('asset', 'Cash & Bank', MODE_NAMES[mode] || mode, sum(rs, (r) => r.in - r.out), 'mode:' + mode);
+  for (const [mode, rs] of group(cashRows(d).filter((r) => r.date <= to), (r) => r.mode)) add('asset', 'Cash & Bank', modeName(mode, d.settings), sum(rs, (r) => r.in - r.out), 'mode:' + mode);
   const bal = partyBalances(d, to);
   add('asset', 'Current Assets', 'Sundry Debtors (receivable)', sum(bal.filter((b) => b.balance > 0), (b) => b.balance));
   add('liability', 'Current Liabilities', 'Sundry Creditors (payable)', -sum(bal.filter((b) => b.balance < 0), (b) => b.balance));
@@ -252,12 +316,34 @@ export const REPORTS = {
     run: (d, p) => {
       const name = new Map(d.parties.map((x) => [x.id, x.name]));
       let bal = 0;
-      return cashRows(d).filter((r) => r.mode === (p.mode || 'bank')).map((r) => ({ date: r.date, type: r.type, party: name.get(r.party_id) || '', ref: r.ref,
-        money_in: r.in, money_out: r.out, balance: (bal = round2(bal + r.in - r.out)) })).filter((r) => inRange(r.date, p));
+      const all = cashRows(d).filter((r) => r.mode === (p.mode || 'bank')).map((r) => ({ date: r.date, type: r.type, party: name.get(r.party_id) || '', ref: r.ref,
+        money_in: r.in, money_out: r.out, balance: (bal = round2(bal + r.in - r.out)), id: r.id, reconciled: r.reconciled }));
+      const before = all.filter((r) => p.from && r.date < p.from).at(-1); // the range opens on what was there the day before
+      return [...(before ? [{ date: p.from, type: 'opening balance', party: '', ref: 'Brought forward', money_in: 0, money_out: 0, balance: before.balance }] : []), ...all.filter((r) => inRange(r.date, p))];
     } },
-  staff_sales: { title: 'Sales by Staff', group: 'Business Status', params: ['range'], money: ['total'], total: ['bills', 'total'],
-    run: (d, p) => [...group(d.invoices.filter((i) => i.type === 'sale' && !i.order_id && inRange(i.date, p)), (i) => i.created_by || '—')]
-      .map(([staff, is]) => ({ staff, bills: is.length, total: sum(is, (i) => i.total) })).sort((a, b) => b.total - a.total) },
+  // Salesperson picked on the bill, else whoever was logged in. Incentive: Settings → staff incentive % of taxable sales.
+  // ---- Branches & warehouses (every location, not just this one) ----
+  branch_sales: { title: 'Sales by Branch', group: 'Business Status', admin: true, raw: true, params: ['range'], money: ['sales', 'returns', 'net_sales', 'avg_bill', 'purchases'],
+    total: ['bills', 'sales', 'returns', 'net_sales', 'purchases'], run: (rows, branch, p) => salesByBranch(rows, p) },
+  locations: { title: 'Locations', hidden: true, admin: true, raw: true, run: (rows) => locationSummary(rows, today()) },
+  stock_matrix: { title: 'Stock by Location', hidden: true, admin: true, raw: true, run: (rows) => stockMatrix(rows) },
+  transfers: { title: 'Stock Transfers', hidden: true, admin: true, raw: true, run: (rows) => transferList(rows) },
+  restock: { title: 'Restock', hidden: true, admin: true, raw: true,
+    run: (rows, branch, p) => restockPlan({ to: p.to || branch, from: p.from || '', movements: rows('stock_movements'), items: rows('items'), branches: rows('branches') }) },
+  reminders: { title: 'Reminders', hidden: true, raw: true, run: (rows, branch) => reminders(load(rows, branch), rows('certificates') || []) },
+  staff_sales: { title: 'Sales by Staff', group: 'Business Status', params: ['range'], money: ['taxable', 'total', 'incentive'], total: ['bills', 'taxable', 'total', 'incentive'],
+    run: (d, p) => [...group(d.invoices.filter((i) => i.type === 'sale' && !i.order_id && inRange(i.date, p)), (i) => i.salesperson || i.created_by || '—')]
+      .map(([staff, is]) => {
+        const taxable = sum(is, (i) => i.taxable);
+        return { staff, bills: is.length, taxable, total: sum(is, (i) => i.total), incentive: round2((taxable * (+d.settings.invoice?.incentive_pct || 0)) / 100) };
+      }).sort((a, b) => b.total - a.total) },
+  // Trainers / gyms who send customers. Returns against their bills reduce the commission.
+  referrals: { title: 'Referral Commission', group: 'Business Status', params: ['range'], money: ['sales', 'commission'], total: ['bills', 'sales', 'commission'],
+    run: (d, p) => [...group(d.invoices.filter((i) => i.referrer && (i.type === 'sale' || i.type === 'sale_return') && inRange(i.date, p)), (i) => i.referrer.trim())]
+      .map(([referrer, is]) => {
+        const sales = round2(sum(is, (i) => (i.type === 'sale' ? 1 : -1) * i.taxable));
+        return { referrer, bills: is.filter((i) => i.type === 'sale').length, sales, commission: round2((sales * (+d.settings.invoice?.referral_pct || 0)) / 100) };
+      }).sort((a, b) => b.sales - a.sales) },
   // ---- Expense ----
   expense: { title: 'Expense', group: 'Expense report', params: ['range'], money: ['amount'], total: ['amount'],
     run: (d, p) => d.expenses.filter((e) => inRange(e.date, p)).sort(byDate).map((e) => ({ date: e.date, category: e.category, note: e.note, mode: e.mode, amount: e.amount })) },
@@ -293,13 +379,18 @@ export const REPORTS = {
     } },
   ledgers: { title: 'Chart of Accounts', hidden: true, admin: true, params: [], run: (d) => ledgers(d).L },
   // ---- Loyalty (Vyapar: Parties → Loyalty Points) ----
-  loyalty: { title: 'Loyalty Points', hidden: true, params: [], money: ['value'],
-    run: (d) => {
-      const cfg = d.settings.loyalty || {};
+  // One balance per customer across every branch and the website (this branch's earn / value rules). Points already put on a
+  // website order that isn't billed yet count as used, so they can't be spent twice. Mirrored in Postgres _points() (0013).
+  loyalty: { title: 'Loyalty Points', hidden: true, raw: true, params: [], money: ['value'],
+    run: (rows, branch) => {
+      const base = load(rows, branch), cfg = base.settings.loyalty || {};
       if (!cfg.enabled) return [];
+      const d = { ...base, money: rows('invoices').filter((i) => i.status !== 'cancelled' && STOCK_TYPES.includes(i.type)), payments: rows('payments') };
       const redeemed = new Map(), earned = new Map();
       const pts = d.payments.filter((y) => y.mode === 'points' && y.party_id);
       for (const y of pts) redeemed.set(y.party_id, (redeemed.get(y.party_id) || 0) + ((y.direction === 'in' ? 1 : -1) * y.amount) / (cfg.point_value || 1));
+      for (const o of rows('orders') || []) if (o.points > 0 && o.points_party && !o.invoice_id && o.status !== 'cancelled')
+        redeemed.set(o.points_party, (redeemed.get(o.points_party) || 0) + o.points / (cfg.point_value || 1));
       const paidByPoints = new Map(pts.filter((y) => y.invoice_id).map((y) => [y.invoice_id, y.amount]));
       for (const i of d.money) if (i.party_id && (i.type === 'sale' || i.type === 'sale_return')) {
         const base = i.total - (paidByPoints.get(i.id) || 0); // no points earned on the part paid with points
@@ -386,19 +477,117 @@ export const REPORTS = {
   party_rates: { title: 'Party rates', hidden: true, params: ['party'],
     run: (d, p) => [...group(d.lines.filter((l) => l.inv.party_id === p.party_id && !l.inv.type.endsWith('return')).sort((a, b) => byDate(a.inv, b.inv)), (l) => l.item_id)]
       .map(([item_id, ls]) => ({ item_id, rate: ls.at(-1).rate, date: ls.at(-1).inv.date })) },
+  // Staff → Attendance / Payroll for one month (YYYY-MM). Earned = pay for days worked so far; paid = salary + advances recorded as expenses.
+  staff_month: { title: 'Staff month', hidden: true, admin: true, params: ['month'],
+    run: (d, p) => {
+      const month = /^\d{4}-\d{2}$/.test(p.month || '') ? p.month : new Date().toLocaleDateString('en-CA').slice(0, 7);
+      const n = new Date(+month.slice(0, 4), +month.slice(5, 7), 0).getDate();
+      const att = group(d.attendance.filter((a) => a.date?.startsWith(month)), (a) => a.employee_id);
+      const paid = group(d.expenses.filter((e) => e.employee_id && e.date?.startsWith(month)), (e) => e.employee_id);
+      return d.employees.filter((e) => e.active !== false || att.has(e.id) || paid.has(e.id)).sort((a, b) => String(a.name).localeCompare(String(b.name))).map((e) => {
+        const days = Object.fromEntries((att.get(e.id) || []).map((a) => [a.date, { id: a.id, status: a.status, in_time: a.in_time, out_time: a.out_time }]));
+        const count = (s) => Object.values(days).filter((x) => x.status === s).length;
+        const payable = count('present') + count('leave') + count('off') + count('half') / 2;
+        const earned = round2((e.pay_type === 'daily' ? +e.salary || 0 : (+e.salary || 0) / n) * payable);
+        const ps = paid.get(e.id) || [], given = sum(ps, (x) => x.amount);
+        return { employee_id: e.id, name: e.name, role: e.role, pay_type: e.pay_type || 'monthly', salary: +e.salary || 0, days, days_in_month: n,
+          present: count('present'), half: count('half'), leave: count('leave'), off: count('off'), absent: count('absent'), payable_days: payable,
+          earned, advance: sum(ps.filter((x) => x.category === 'Staff advance'), (x) => x.amount), paid: given, balance: round2(earned - given) };
+      });
+    } },
+  // ---- Follow-ups (Parties → Follow-ups) ----
+  // Customers about to run out: last purchase + how long it lasts. "How long" is their own rhythm when they bought it before
+  // (days between purchases per unit), else the item's refill_days. Flavours of one product (same group_key) count as one.
+  refills: { title: 'Refills due', group: 'Party report', params: [],
+    run: (d, p) => {
+      const now = p.today || today(), byId = new Map(d.parties.map((x) => [x.id, x]));
+      const key = (l) => `${l.inv.party_id}|${d.items.get(l.item_id)?.group_key || l.item_id}`;
+      return [...group(d.lines.filter((l) => l.inv.type === 'sale' && l.inv.party_id), key).values()].map((ls) => {
+        ls.sort((a, b) => byDate(a.inv, b.inv));
+        const last = ls.at(-1), item = d.items.get(last.item_id);
+        let per = Number(item?.refill_days) || 0;
+        const span = (new Date(last.inv.date) - new Date(ls[0].inv.date)) / 864e5, before = sum(ls.filter((l) => l.inv.id !== last.inv.id), (l) => l.qty);
+        if (span > 0 && before > 0) per = span / before;
+        if (!per) return null;
+        const due = addDays(last.inv.date, Math.round(per * last.qty)), party = byId.get(last.inv.party_id);
+        return { party_id: last.inv.party_id, name: party?.name || last.inv.party_name, phone: party?.phone || last.inv.party_phone || '', item: last.name,
+          last_bought: last.inv.date, qty: last.qty, due, days_left: Math.round((new Date(due) - new Date(now)) / 864e5) };
+      }).filter((r) => r && r.days_left <= 7 && r.days_left >= -30).sort((a, b) => a.days_left - b.days_left);
+    } },
+  // Regulars who stopped coming: bought before, nothing in the last `days` (default 60), within the last year.
+  lapsed: { title: 'Lapsed customers', group: 'Party report', params: [], money: ['spent'],
+    run: (d, p) => {
+      const now = p.today || today(), cut = addDays(now, -(Number(p.days) || 60)), year = addDays(now, -365);
+      const byId = new Map(d.parties.map((x) => [x.id, x]));
+      return [...group(d.invoices.filter((i) => i.type === 'sale' && i.party_id), (i) => i.party_id)].map(([id, is]) => {
+        const last = is.map((i) => i.date).sort().at(-1), party = byId.get(id);
+        return { party_id: id, name: party?.name || is[0].party_name, phone: party?.phone || '', last_visit: last, bills: is.length, spent: sum(is, (i) => i.total) };
+      }).filter((r) => r.last_visit < cut && r.last_visit >= year).sort((a, b) => b.spent - a.spent);
+    } },
+  // ---- Day close (Z report) ----
+  // Per payment mode: balance before the day, money in / out on the day, and the closing balance the drawer / account should show.
+  day_close: { title: 'Day close', hidden: true, params: ['date'],
+    run: (d, p) => {
+      const date = p.date || today(), all = cashRows(d);
+      const modes = [...new Set(['cash', 'upi', 'card', ...all.filter((r) => r.date === date).map((r) => r.mode)])];
+      const day = d.invoices.filter((i) => i.date === date);
+      const of = (t) => { const is = day.filter((i) => i.type === t); return { n: is.length, total: sum(is, (i) => i.total) }; };
+      return {
+        date, modes: modes.map((mode) => {
+          const rs = all.filter((r) => r.mode === mode && r.date <= date), on = rs.filter((r) => r.date === date);
+          const opening = sum(rs.filter((r) => r.date < date), (r) => r.in - r.out), money_in = sum(on, (r) => r.in), money_out = sum(on, (r) => r.out);
+          return { mode, opening, money_in, money_out, net: round2(money_in - money_out), closing: round2(opening + money_in - money_out) };
+        }),
+        sales: of('sale'), returns: of('sale_return'), purchases: of('purchase'),
+        credit: sum(day.filter((i) => i.type === 'sale'), (i) => i.total - (i.paid || 0)),
+        expenses: sum(d.expenses.filter((e) => e.date === date), (e) => e.amount),
+        edits: d.audit.filter((a) => a.created_at?.slice(0, 10) === date).length,
+        closed: d.closes.filter((c) => c.date === date).sort((a, b) => b.created_at.localeCompare(a.created_at))[0] || null,
+      };
+    } },
+  // ---- Audit trail ----
+  audit: { title: 'Audit Trail', group: 'Business Status', admin: true, params: ['range'],
+    run: (d, p) => d.audit.filter((a) => inRange(a.created_at.slice(0, 10), p)).sort((a, b) => b.created_at.localeCompare(a.created_at))
+      .map((a) => ({ when: a.created_at.slice(0, 16).replace('T', ' '), action: a.action, bill: a.ref_no, by: a.by,
+        before: a.data?.before ? `₹${a.data.before.total} · ${a.data.before.lines?.length} items` : '',
+        after: a.data?.after ? `₹${a.data.after.total} · ${a.data.after.lines?.length} items` : '', reason: a.data?.reason || '' })) },
+  // Insights page and the insight strips on other screens (shared/insights.js).
+  insights: { title: 'Insights', hidden: true, params: [], run: (d, p) => insights(d, p, { refills: REPORTS.refills.run(d, p), lapsed: REPORTS.lapsed.run(d, p) }) },
+  // Online Store → Offers → Near-expiry: one row per batch in stock, with the suggested (or live) offer. Rules: shared/offers.js.
+  expiry_offers: { title: 'Near-expiry offers', hidden: true, params: [],
+    run: (d, p) => {
+      const g = new Map();
+      for (const m of d.moves) if (m.expiry) { const k = `${m.item_id}|${m.batch_no || ''}|${m.expiry}`; g.set(k, round2((g.get(k) || 0) + m.qty)); }
+      const batches = [...g].map(([k, qty]) => { const [item_id, batch_no, expiry] = k.split('|'); return { item_id, batch_no, expiry, qty }; });
+      return expiryOffers({ batches, items: d.items, offers: d.offers, today: p.today || today(), cfg: d.settings.expiry_offers });
+    } },
+  // Pairs often on the same bill (last 90 days), to start a combo from.
+  combo_ideas: { title: 'Combo ideas', hidden: true, params: [],
+    run: (d, p) => {
+      const since = addDays(p.today || today(), -90), pairs = new Map();
+      for (const ls of group(d.lines.filter((l) => l.inv.type === 'sale' && l.inv.date > since), (l) => l.invoice_id).values()) {
+        const ids = [...new Set(ls.map((l) => l.item_id))].sort();
+        for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) { const k = ids[i] + '|' + ids[j]; pairs.set(k, (pairs.get(k) || 0) + 1); }
+      }
+      return [...pairs].filter(([, n]) => n >= 2).sort((a, b) => b[1] - a[1]).slice(0, 12).map(([k, bills]) => {
+        const [a, b] = k.split('|');
+        return { a, b, items: `${d.items.get(a)?.name} + ${d.items.get(b)?.name}`, bills };
+      });
+    } },
+  gstr1_json: { title: 'GSTR-1 JSON', hidden: true, admin: true, raw: true, params: ['range'], run: (rows, branch, p) => gstr1Json(rows, branch, p) },
   // Not a table on its own: balances for the Cash & Bank screen.
   cash_bank: { title: 'Cash & Bank balances', hidden: true, params: [], money: ['balance'],
     run: (d) => [...group(cashRows(d), (r) => r.mode)].map(([mode, rs]) => ({ mode, money_in: sum(rs, (r) => r.in), money_out: sum(rs, (r) => r.out), balance: sum(rs, (r) => r.in - r.out) })) },
 };
 
 // Journal entry rules (Vyapar: debits must equal credits). Returns the cleaned lines or throws a message.
-export function checkJournal(body, accounts) {
+export function checkJournal(body, accounts, settings) {
   const lines = (body.lines || []).map((l) => ({ account: String(l.account || ''), debit: round2(+l.debit || 0), credit: round2(+l.credit || 0) }))
     .filter((l) => l.account && (l.debit || l.credit));
   if (lines.length < 2) throw new Error('A journal needs at least two lines');
   for (const l of lines) {
     if (l.debit < 0 || l.credit < 0 || (l.debit && l.credit)) throw new Error('Each line is either a debit or a credit');
-    const ok = l.account.startsWith('mode:') ? MODE_NAMES[l.account.slice(5)] : accounts.some((a) => 'acc:' + a.id === l.account);
+    const ok = l.account.startsWith('mode:') ? payModes(settings).includes(l.account.slice(5)) : accounts.some((a) => 'acc:' + a.id === l.account);
     if (!ok) throw new Error('Unknown account in journal');
   }
   const dr = sum(lines, (l) => l.debit), cr = sum(lines, (l) => l.credit);
@@ -408,12 +597,25 @@ export function checkJournal(body, accounts) {
 
 // Points a customer can still redeem, in rupees. Billing and Payment-In check this before accepting mode 'points'.
 export function pointsValue(rows, branch, party_id) {
-  return REPORTS.loyalty.run(load(rows, branch), {}).find((x) => x.party_id === party_id)?.value || 0;
+  return REPORTS.loyalty.run(rows, branch, {}).find((x) => x.party_id === party_id)?.value || 0;
 }
 
 export function runReport(name, rows, branch, params = {}, role = 'admin') {
   const r = REPORTS[name];
   if (!r) throw Object.assign(new Error('Unknown report'), { user: true });
   if (r.admin && role !== 'admin') throw Object.assign(new Error('Admin only'), { user: true, status: 403 });
-  return r.run(load(rows, branch), params);
+  return r.raw ? r.run(rows, branch, params) : r.run(load(rows, branch), params);
+}
+
+// Day close from the day_close report and what was counted. The cash difference becomes a cash adjustment, so the books
+// match the drawer and tomorrow opens on the counted amount. Other modes are recorded for checking against settlements.
+export function dayCloseRow(rep, body, user) {
+  const counted = Object.fromEntries(Object.entries(body.counted || {}).filter(([, v]) => v !== '' && v != null && !Number.isNaN(Number(v))).map(([k, v]) => [k, round2(v)]));
+  if (!('cash' in counted)) throw new Error('Count the cash in the drawer first');
+  const expected = Object.fromEntries(rep.modes.map((m) => [m.mode, m.mode === 'cash' ? m.closing : m.net]));
+  const diff = round2(counted.cash - (expected.cash || 0));
+  return {
+    row: { date: rep.date, expected, counted, diff, closed_by: user?.name || null, note: body.note || null },
+    adjust: diff ? { kind: diff > 0 ? 'add' : 'reduce', mode: 'cash', amount: Math.abs(diff), date: rep.date, note: `Day close ${diff > 0 ? 'excess' : 'shortage'} ${rep.date}` } : null,
+  };
 }

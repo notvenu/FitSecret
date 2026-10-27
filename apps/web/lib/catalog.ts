@@ -1,13 +1,15 @@
 import 'server-only';
 import { createClient } from '@supabase/supabase-js';
 import { SEED_ITEMS, SEED_CATEGORIES } from '@fitsecret/shared/seed';
+import { productName } from '@fitsecret/shared/variants';
 
 export type Variant = {
   id: string; name: string; slug: string; flavour: string; size: string; mrp: number; price: number; stock: number; image: string | null;
+  bulkPrice: number | null; bulkMin: number | null; // bulk (wholesale) price per unit from bulkMin units, set per item in the POS
 };
 export type Product = {
   key: string; name: string; brand: string; category: string; categorySlug: string; sub: string; subSlug: string; goals: string[]; description: string;
-  featured: boolean; variants: Variant[]; price: number; mrp: number; inStock: boolean; image: string | null;
+  featured: boolean; variants: Variant[]; price: number; mrp: number; inStock: boolean; image: string | null; bulk: boolean;
 };
 export type Category = { name: string; slug: string; count: number; image: string | null; subs: { name: string; slug: string; count: number }[] };
 export type Brand = { name: string; count: number; image: string | null };
@@ -16,7 +18,7 @@ type Row = {
   id: string; name: string; slug: string; group_key: string | null; brand: string | null; category_slug: string | null; category_name: string | null;
   parent_slug: string | null; parent_name: string | null;
   flavour: string | null; size: string | null; mrp: number | null; sale_price: number; featured: boolean | null; goals: string[] | null;
-  description: string | null; image: string | null; stock: number;
+  description: string | null; image: string | null; stock: number; wholesale_price?: number | null; wholesale_min_qty?: number | null;
 };
 
 export const live = !!(process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
@@ -58,17 +60,19 @@ export async function getProducts(): Promise<Product[]> {
     const variants = rs.map((r) => ({
       id: r.id, name: r.name, slug: r.slug, flavour: r.flavour || '', size: r.size || '', mrp: Number(r.mrp || r.sale_price),
       price: Number(r.sale_price), stock: Number(r.stock), image: r.image,
+      ...(Number(r.wholesale_price) > 0 && Number(r.wholesale_min_qty) > 0 ? { bulkPrice: Number(r.wholesale_price), bulkMin: Number(r.wholesale_min_qty) } : { bulkPrice: null, bulkMin: null }),
     })).sort((a, b) => a.price - b.price);
     const first = rs[0];
     const cheapest = variants.find((v) => v.stock > 0) || variants[0];
     return {
-      key, name: first.name.replace(/\s{2,}/g, ' ').trim(), brand: first.brand || '',
+      // a product with several variants is named without the first variant's size / flavour ("ON Gold Standard whey")
+      key, name: (rs.length > 1 ? productName(first.name, first.size, first.flavour) : first.name).replace(/\s{2,}/g, ' ').trim(), brand: first.brand || '',
       // items point at a subcategory when one exists; products expose top-level + sub separately
       category: first.parent_name || first.category_name || 'Wellness', categorySlug: first.parent_slug || first.category_slug || 'organic-products',
       sub: first.parent_slug ? first.category_name || '' : '', subSlug: first.parent_slug ? first.category_slug || '' : '',
       goals: first.goals || [], description: first.description || '',
       featured: rs.some((r) => r.featured), variants, price: cheapest.price, mrp: cheapest.mrp, inStock: variants.some((v) => v.stock > 0),
-      image: variants.find((v) => v.image)?.image || null,
+      image: variants.find((v) => v.image)?.image || null, bulk: variants.some((v) => v.bulkPrice),
     };
   });
 }
@@ -116,4 +120,21 @@ export async function getReviews(key: string): Promise<Review[]> {
   const sb = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!, { auth: { persistSession: false } });
   const { data } = await sb.from('shop_reviews').select('id, name, rating, title, body, reply, verified, created_at').eq('product_key', key).order('created_at', { ascending: false }).limit(50);
   return (data as Review[]) || []; // empty on databases without 0005
+}
+
+export type Certificate = { id: string; item_id: string; batch_no: string | null; kind: string; title: string; url: string; valid_until: string | null };
+const anon = () => createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!, { auth: { persistSession: false } });
+
+// Current lab reports / COA / FSSAI papers for these variants (POS: Items → open an item → Certificates).
+export async function getCertificates(itemIds: string[]): Promise<Certificate[]> {
+  if (!live || !itemIds.length) return [];
+  const { data } = await anon().from('shop_certificates').select('*').in('item_id', itemIds);
+  return (data as Certificate[]) || []; // empty on databases before 0008
+}
+
+// Items most often bought together with these (shop bills and website orders), most frequent first.
+export async function alsoBought(itemIds: string[]): Promise<string[]> {
+  if (!live || !itemIds.length) return [];
+  const { data } = await anon().rpc('also_bought', { p_items: itemIds, p_limit: 12 });
+  return ((data as { item_id: string }[]) || []).map((r) => r.item_id);
 }

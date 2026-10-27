@@ -2,29 +2,31 @@
 // System ledgers (cash & bank, debtors, creditors, stock, GST, sales) come from the books; you add your own accounts on top.
 import { useState } from 'react';
 import { today } from '@fitsecret/shared';
-import { ACCOUNT_TYPES, MODE_NAMES } from '@fitsecret/shared/reports';
-import { api, useApi, toast, fail, downloadCsv } from '../api.js';
-import { Btn, Field, Modal, Money, Page, Table, Badge, useForm, cx } from '../ui.jsx';
+import { ACCOUNT_TYPES, payModes, modeName } from '@fitsecret/shared/reports';
+import { api, useApi, toast, fail, downloadCsv, shop, go } from '../api.js';
+import { Btn, Field, Modal, Money, Table, Badge, DeleteBtn, SideNav, SectionPage, useForm, cx, ModeOptions } from '../ui.jsx';
 
-const MODES = ['cash', 'upi', 'card', 'bank'];
 
 export default function Accounting({ route }) {
   const tab = ['journals', 'accounts', 'statement'].includes(route.query.tab) ? route.query.tab : 'accounts';
   const accounts = useApi('/t/accounts');
-  const options = [...MODES.map((m) => ['mode:' + m, MODE_NAMES[m]]), ...(accounts.data || []).map((a) => ['acc:' + a.id, a.name])];
-  if (tab === 'journals') return <Journals options={options} newOne={route.query.new === '1'} />;
-  if (tab === 'statement') return <Statement accounts={accounts.data || []} pick={route.query.account} />;
-  return <Chart accounts={accounts} newOne={route.query.new === '1'} />;
+  const options = [...payModes(shop).map((m) => ['mode:' + m, modeName(m, shop)]), ...(accounts.data || []).map((a) => ['acc:' + a.id, a.name])];
+  const nav = <SideNav title="Accounting" value={tab} onChange={(k) => go('/accounting?tab=' + k)} groups={[{ items: [
+    { key: 'accounts', label: 'Chart of Accounts', desc: 'All ledgers and your own accounts' }, { key: 'journals', label: 'Journal Entries', desc: 'Capital, loans, depreciation…' },
+    { key: 'statement', label: 'Account Statements', desc: 'One account, entry by entry' }] }]} />;
+  if (tab === 'journals') return <Journals nav={nav} options={options} newOne={route.query.new === '1'} />;
+  if (tab === 'statement') return <Statement nav={nav} accounts={accounts.data || []} pick={route.query.account} />;
+  return <Chart nav={nav} accounts={accounts} newOne={route.query.new === '1'} />;
 }
 
-function Chart({ accounts, newOne }) {
+function Chart({ nav, accounts, newOne }) {
   const ledgers = useApi('/reports/x/ledgers');
   const [edit, setEdit] = useState(newOne ? {} : null);
   const [asset, setAsset] = useState(false);
   const reload = () => { accounts.reload(); ledgers.reload(); };
   const groups = [...new Set((ledgers.data || []).map((l) => l.group))];
   return (
-    <Page title="Chart of Accounts" actions={<>
+    <SectionPage nav={nav} title="Chart of Accounts" actions={<>
       <Btn onClick={() => setAsset(true)}>+ Add fixed asset</Btn>
       <Btn v="primary" onClick={() => setEdit({})}>+ Add account</Btn>
     </>}>
@@ -58,7 +60,7 @@ function Chart({ accounts, newOne }) {
       </div>
       {edit && <AccountForm acc={edit.id ? edit : null} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); reload(); }} />}
       {asset && <FixedAsset onClose={() => setAsset(false)} onSaved={() => { setAsset(false); reload(); }} />}
-    </Page>
+    </SectionPage>
   );
 }
 
@@ -75,7 +77,10 @@ function AccountForm({ acc, onClose, onSaved }) {
         <Field label="Type"><select className="input" {...bind('type')}>{Object.entries(ACCOUNT_TYPES).map(([k, [l]]) => <option key={k} value={k}>{l}</option>)}</select></Field>
         <Field label="Opening balance" {...bind('opening_balance')} inputMode="decimal" />
         <Field label="Note" {...bind('note')} className="col-span-2" />
-        <div className="col-span-2 flex justify-end gap-2"><Btn onClick={onClose}>Cancel</Btn><Btn v="primary" type="submit">Save</Btn></div>
+        <div className="col-span-2 flex justify-end gap-2">
+          {acc && <DeleteBtn what={acc.name} onDelete={() => api('/t/accounts/' + acc.id, null, 'DELETE').then(() => { toast('Account deleted'); onSaved(); }, fail)} />}
+          <Btn onClick={onClose}>Cancel</Btn><Btn v="primary" type="submit">Save</Btn>
+        </div>
       </form>
     </Modal>
   );
@@ -98,7 +103,7 @@ function FixedAsset({ onClose, onSaved }) {
         <Field label="Asset" {...bind('name')} required autoFocus className="col-span-2" hint="e.g. Display racks, Billing PC, AC" />
         <Field label="Cost" {...bind('amount')} required inputMode="decimal" />
         <Field label="Date" {...bind('date', 'date')} />
-        <Field label="Paid from"><select className="input" {...bind('paid_from')}>{MODES.map((m) => <option key={m} value={m}>{MODE_NAMES[m]}</option>)}</select></Field>
+        <Field label="Paid from"><select className="input" {...bind('paid_from')}><ModeOptions /></select></Field>
         <Field label="Note" {...bind('note')} />
         <p className="col-span-2 text-xs text-black/50">Depreciation: add a journal later (debit an “Depreciation” expense account, credit this asset).</p>
         <div className="col-span-2 flex justify-end gap-2"><Btn onClick={onClose}>Cancel</Btn><Btn v="primary" type="submit">Save</Btn></div>
@@ -107,41 +112,42 @@ function FixedAsset({ onClose, onSaved }) {
   );
 }
 
-function Journals({ options, newOne }) {
+function Journals({ nav, options, newOne }) {
   const list = useApi('/t/journals');
   const [edit, setEdit] = useState(newOne);
   const name = Object.fromEntries(options);
   const del = (j) => confirm(`Delete ${j.no}?`) && api('/t/journals/' + j.id, null, 'DELETE').then(list.reload, fail);
   return (
-    <Page title="Journal Entries" actions={<>
+    <SectionPage nav={nav} title="Journal Entries" actions={<>
       <Btn onClick={() => downloadCsv('journals', list.data?.flatMap((j) => j.lines.map((l) => ({ no: j.no, date: j.date, note: j.note, account: name[l.account], debit: l.debit, credit: l.credit }))))}>Export</Btn>
       <Btn v="primary" onClick={() => setEdit(true)}>+ Add journal entry</Btn>
     </>}>
       <p className="mb-3 text-sm text-black/55">Journal vouchers are manual entries in your books: owner capital, loans, depreciation, cash deposited, write-offs. Each entry must balance (total debit = total credit).</p>
       <div className="card">
-        <Table rows={list.data} empty="No journal entries yet" columns={[
+        <Table rows={list.data} onRow={setEdit} empty="No journal entries yet" columns={[
           { k: 'date', label: 'Date' }, { k: 'no', label: 'No.' }, { k: 'note', label: 'Description' },
           { label: 'Entries', r: (j) => <div className="text-xs">{j.lines.map((l, i) => <div key={i}>{l.debit ? 'Dr' : 'Cr'} {name[l.account] || '?'} <Money v={l.debit || l.credit} /></div>)}</div> },
           { label: 'Amount', right: true, r: (j) => <Money v={j.lines.reduce((s, l) => s + (l.debit || 0), 0)} className="font-medium" /> },
-          { label: '', r: (j) => <button className="text-xs text-red-600 hover:underline" onClick={() => del(j)}>Delete</button> },
+          { label: '', r: (j) => <button className="text-xs text-red-600 hover:underline" onClick={(e) => { e.stopPropagation(); del(j); }}>Delete</button> },
         ]} />
       </div>
-      {edit && <JournalForm options={options} onClose={() => setEdit(false)} onSaved={() => { setEdit(false); list.reload(); }} />}
-    </Page>
+      {edit && <JournalForm j={edit === true ? null : edit} options={options} onClose={() => setEdit(false)} onSaved={() => { setEdit(false); list.reload(); }} />}
+    </SectionPage>
   );
 }
 
-function JournalForm({ options, onClose, onSaved }) {
-  const [meta, setMeta] = useState({ date: today(), note: '' });
-  const [lines, setLines] = useState([{ account: '', debit: '', credit: '' }, { account: '', debit: '', credit: '' }]);
+// j = an existing entry to correct (same number), else a new one.
+function JournalForm({ j, options, onClose, onSaved }) {
+  const [meta, setMeta] = useState(j ? { date: j.date, note: j.note || '' } : { date: today(), note: '' });
+  const [lines, setLines] = useState(j ? j.lines.map((l) => ({ account: l.account, debit: l.debit || '', credit: l.credit || '' })) : [{ account: '', debit: '', credit: '' }, { account: '', debit: '', credit: '' }]);
   const set = (i, patch) => setLines((ls) => ls.map((l, j) => (j === i ? { ...l, ...patch } : l)));
   const dr = lines.reduce((s, l) => s + (+l.debit || 0), 0), cr = lines.reduce((s, l) => s + (+l.credit || 0), 0);
   const submit = async (e) => {
     e.preventDefault();
-    try { await api('/t/journals', { ...meta, lines }); toast('Journal saved'); onSaved(); } catch (e) { fail(e); }
+    try { await api('/t/journals', { ...(j && { id: j.id, no: j.no }), ...meta, lines }); toast('Journal saved'); onSaved(); } catch (e) { fail(e); }
   };
   return (
-    <Modal wide title="New journal entry" onClose={onClose}>
+    <Modal wide title={j ? `Edit ${j.no}` : 'New journal entry'} onClose={onClose}>
       <form onSubmit={submit}>
         <div className="mb-3 grid grid-cols-3 gap-3">
           <Field label="Date" type="date" value={meta.date} onChange={(e) => setMeta({ ...meta, date: e.target.value })} />
@@ -174,12 +180,12 @@ function JournalForm({ options, onClose, onSaved }) {
   );
 }
 
-function Statement({ accounts, pick }) {
+function Statement({ nav, accounts, pick }) {
   const [acc, setAcc] = useState(pick || '');
   const [range, setRange] = useState({ from: today().slice(0, 5) + '01-01', to: today() });
   const st = useApi(acc ? `/reports/x/account_statement?account=${acc}&from=${range.from}&to=${range.to}` : null);
   return (
-    <Page title="Account Statements" actions={<Btn onClick={() => downloadCsv('account-statement', st.data)}>Export</Btn>}>
+    <SectionPage nav={nav} title="Account Statements" actions={<Btn onClick={() => downloadCsv('account-statement', st.data)}>Export</Btn>}>
       <div className="mb-3 flex flex-wrap items-end gap-3">
         <Field label="Account"><select className="input min-w-64" value={acc} onChange={(e) => setAcc(e.target.value)}>
           <option value="">Choose…</option>{accounts.map((a) => <option key={a.id} value={'acc:' + a.id}>{a.name}</option>)}
@@ -196,6 +202,6 @@ function Statement({ accounts, pick }) {
           { k: 'balance', label: 'Balance', right: true, r: (r) => <Money v={r.balance} className="font-medium" /> },
         ]} />}
       </div>
-    </Page>
+    </SectionPage>
   );
 }

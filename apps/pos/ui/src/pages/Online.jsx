@@ -5,9 +5,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { ORDER_LABEL, GOALS, inr, today, slugify, round2 } from '@fitsecret/shared';
 import { code128Svg } from '@fitsecret/shared/barcode';
 import { storeSettings, checkCoupon, couponDiscount, customersFromOrders } from '@fitsecret/shared/store';
+import { expiryNote, EXPIRY_DEFAULTS } from '@fitsecret/shared/offers';
 import { api, useApi, toast, fail, go, downloadCsv } from '../api.js';
-import { Btn, Field, Modal, Money, Table, Badge, Loading, useForm, cx } from '../ui.jsx';
-import { Logo, Icon } from '../App.jsx';
+import { Btn, Field, Modal, Money, Table, Badge, Loading, DeleteBtn, SideNav, SectionPage, useForm, cx } from '../ui.jsx';
+import { Logo, Icon, SyncPill } from '../App.jsx';
+import { can } from '@fitsecret/shared/permissions';
 import Orders, { ORDER_C } from './Orders.jsx';
 import { catOptions } from './Items.jsx';
 
@@ -21,15 +23,17 @@ const I = {
 };
 const NAV = [
   ['', 'Dashboard', I.dash], ['orders', 'Orders', I.orders], ['inbox', 'Inbox', I.inbox], ['products', 'Products', I.products, true], ['categories', 'Categories', I.cats, true],
-  ['offers', 'Offers & coupons', I.offers, true], ['customers', 'Customers', I.customers], ['banners', 'Banners', I.banners, true],
+  ['offers', 'Offers & combos', I.offers], ['customers', 'Customers', I.customers], ['banners', 'Banners', I.banners, true],
   ['settings', 'Store settings', I.settings, true],
 ];
 const daysAgo = (n) => new Date(Date.now() - n * 864e5).toLocaleDateString('en-CA');
 const day = (ts) => new Date(ts).toLocaleDateString('en-CA');
 
-export default function OnlineMode({ boot, route, reload }) {
+export default function OnlineMode({ boot, route, reload, sync }) {
   const admin = boot.user.role === 'admin';
-  const sec = NAV.find(([k, , , a]) => k === (route.parts[1] || '') && (admin || !a)) ? route.parts[1] || '' : '';
+  // owners see everything; others what their login allows (offers need 'offers', customers the customer list)
+  const okNav = ([k, , , a]) => (admin || !a) && can(boot.user, { offers: 'offers', customers: 'parties' }[k]);
+  const sec = NAV.find((n) => n[0] === (route.parts[1] || '') && okNav(n)) ? route.parts[1] || '' : '';
   const ob = boot.branches?.find((b) => b.is_online && !b.deleted) || boot.branch; // branch that fulfils website orders
   const store = storeSettings(ob);
   const orders = useApi('/orders');
@@ -48,7 +52,7 @@ export default function OnlineMode({ boot, route, reload }) {
     try { await api('/t/branches', { id: ob.id, settings: { ...ob.settings, store: { ...ob.settings?.store, ...patch } } }); toast(msg); reload(); } catch (e) { fail(e); }
   };
   const exit = () => { localStorage.removeItem('fs_mode'); go('/'); };
-  const props = { boot, admin, ob, store, saveStore, orders, inbox, reload };
+  const props = { boot, admin, ob, store, saveStore, orders, inbox, reload, route };
 
   return (
     <div className="flex h-screen">
@@ -61,8 +65,8 @@ export default function OnlineMode({ boot, route, reload }) {
             <span className={cx('h-2 w-2 rounded-full', store.open ? 'bg-ink animate-pulse' : 'bg-white')} />{store.open ? 'Live · taking orders' : 'Paused'}
           </button>
         </div>
-        <nav className="flex-1 space-y-0.5 overflow-y-auto px-2 text-[15.5px]">
-          {NAV.filter(([, , , a]) => admin || !a).map(([k, l, ic]) => (
+        <nav className="flex-1 space-y-0.5 overflow-y-auto overscroll-contain px-2 text-[15.5px]">
+          {NAV.filter(okNav).map(([k, l, ic]) => (
             <a key={k} href={'#/online' + (k ? '/' + k : '')}
               className={cx('flex items-center gap-3.5 rounded-xl px-3.5 py-[clamp(0.55rem,1.9vh,1.05rem)] transition-colors', sec === k ? 'bg-brand font-semibold text-ink' : 'hover:bg-ink-2')}>
               <Icon d={ic} className="h-[22px] w-[22px]" /><span className="flex-1">{l}</span>
@@ -71,6 +75,8 @@ export default function OnlineMode({ boot, route, reload }) {
             </a>
           ))}
         </nav>
+        {/* the website only sees changes once they reach the cloud */}
+        <SyncPill s={sync} />
         <div className="space-y-1 p-2">
           {store.site_url && <a href={store.site_url} target="_blank" rel="noreferrer" className="flex items-center gap-3 rounded-xl px-3.5 py-2 text-sm hover:bg-ink-2"><Icon d={I.web} /> View website ↗</a>}
           <button onClick={exit} className="w-full rounded-full bg-white/15 px-4 py-2 text-sm font-semibold hover:bg-white/25">Exit online mode</button>
@@ -91,12 +97,13 @@ export default function OnlineMode({ boot, route, reload }) {
   );
 }
 
-const Wrap = ({ title, actions, children }) => (
+// nav: a side list of sub-sections (same as Reports / Settings); without it, a plain page.
+const Wrap = ({ title, actions, children, nav, hint }) => (nav ? <SectionPage nav={nav} title={title} hint={hint} actions={actions}>{children}</SectionPage> : (
   <div className="rise mx-auto max-w-[1400px] p-5 lg:p-7">
     <div className="mb-5 flex flex-wrap items-center justify-between gap-3"><h1 className="display text-3xl">{title}</h1><div className="flex flex-wrap gap-2">{actions}</div></div>
     {children}
   </div>
-);
+));
 const Stat = ({ label, v, sub, tone }) => (
   <div className="card p-4"><div className="text-xs text-black/50">{label}</div><div className={cx('mt-1 text-2xl font-bold tabular-nums', tone)}>{v}</div>{sub && <div className="text-xs text-black/45">{sub}</div>}</div>
 );
@@ -232,15 +239,15 @@ function Products({ boot, ob }) {
   const toggleSel = (id) => setSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const allSel = rows?.length > 0 && rows.every((i) => sel.has(i.id));
   return (
-    <Wrap title="Products" actions={<Btn onClick={() => downloadCsv('website-products', rows?.map(({ goals, description, ...r }) => r))}>Export</Btn>}>
+    <Wrap title={cat ? cats.data?.find((c) => c.id === cat)?.name : FILTERS.find(([k]) => k === f)?.[1] === 'All' ? 'All products' : FILTERS.find(([k]) => k === f)?.[1]}
+      nav={<SideNav title="Products" value={cat ? 'c:' + cat : f || 'all'} onChange={(k) => { if (k.startsWith('c:')) { setCat(k.slice(2)); setF(''); } else { setCat(''); setF(k === 'all' ? '' : k); } }}
+        groups={[{ items: FILTERS.map(([k, l]) => ({ key: k || 'all', label: k ? l : 'All products', badge: items.data ? (k ? items.data.filter(FILTER_FN[k]).length : items.data.length) : undefined })) },
+          { label: 'Categories', items: catOptions(cats.data).map((c) => ({ key: 'c:' + c.id, label: c.name, indent: c.depth > 0 })) }]} />}
+      hint="What shows on the website: publish, hide or feature products in bulk, and fill in photos and descriptions."
+      actions={<Btn onClick={() => downloadCsv('website-products', rows?.map(({ goals, description, ...r }) => r))}>Export</Btn>}>
       {ob?.id !== boot.branch?.id && <p className="mb-3 rounded-[14px] bg-amber-50 p-3 text-sm text-amber-900">Stock shown is this counter's ({boot.branch?.name}). Website stock comes from {ob?.name}.</p>}
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <input className="input max-w-xs" placeholder="Search name, brand, SKU…" value={q} onChange={(e) => setQ(e.target.value)} />
-        <select className="input max-w-52" value={cat} onChange={(e) => setCat(e.target.value)} aria-label="Category">
-          <option value="">All categories</option>{catOptions(cats.data).map((c) => <option key={c.id} value={c.id}>{c.depth ? '   ' + c.name : c.name}</option>)}
-        </select>
-        {FILTERS.map(([k, l]) => <button key={k} onClick={() => setF(k)} className={cx('rounded-full px-3 py-1 text-xs font-medium', f === k ? 'bg-ink text-white' : 'bg-black/5')}>
-          {l}{k && items.data ? ` · ${items.data.filter(FILTER_FN[k]).length}` : ''}</button>)}
       </div>
       {sel.size > 0 && (
         <div className="sticky top-0 z-10 mb-3 flex flex-wrap items-center gap-2 rounded-[14px] bg-ink px-4 py-2 text-sm text-white">
@@ -376,7 +383,7 @@ function Categories() {
     </Wrap>
   );
 }
-function CategoryForm({ c, tops, onClose, onSave }) {
+export function CategoryForm({ c, tops, onClose, onSave }) {
   const [f, , bind] = useForm({ name: c.name, slug: c.slug, image: c.image || '', parent_id: c.parent_id || '' });
   return (
     <Modal title={'Edit ' + c.name} onClose={onClose}>
@@ -393,7 +400,39 @@ function CategoryForm({ c, tops, onClose, onSave }) {
 
 // ---------- Offers ----------
 const offerText = (c) => `${c.kind === 'percent' ? `${c.value}% off` : `₹${c.value} off`}${c.max_discount ? ` up to ₹${c.max_discount}` : ''}${c.min_order ? ` on ₹${c.min_order}+` : ''}`;
-function Offers({ orders }) {
+// Offers: coupons (typed at checkout), combos (a set of items for one price, counter and website) and near-expiry offers
+// (worked out per batch, switched on by a person). ?tab= coupons | combos | expiry
+// base: '/online/offers' inside online mode, '/offers' from the main menu (same page, both modes).
+export function Offers({ orders, admin, route, boot, base = '/online/offers' }) {
+  const tab = ['coupons', 'combos', 'expiry'].includes(route?.query.tab) ? route.query.tab : admin ? 'coupons' : 'expiry';
+  const nav = <SideNav title="Offers" value={tab} onChange={(t) => go(base + '?tab=' + t)} groups={[{ items: [
+    ...(admin ? [{ key: 'coupons', label: 'Coupons', desc: 'Codes typed at checkout' }, { key: 'combos', label: 'Combos', desc: 'Items together for one price' }] : []),
+    { key: 'expiry', label: 'Near-expiry', desc: 'Batches close to expiry' }] }]} />;
+  return <>
+    {tab === 'coupons' && <Coupons orders={orders} nav={nav} />}
+    {tab === 'combos' && <Combos nav={nav} />}
+    {tab === 'expiry' && <ExpiryOffers boot={boot} admin={admin} nav={nav} />}
+  </>;
+}
+
+// Where an offer works: a three-way toggle on the form, a badge in the lists.
+const CHANNEL_OPTS = [['both', 'Counter & website'], ['counter', 'Counter only'], ['online', 'Website only']];
+const ChannelBadge = ({ c }) => (c && c !== 'both' ? <Badge c={c === 'counter' ? 'amber' : 'blue'}>{c === 'counter' ? 'counter only' : 'website only'}</Badge> : <Badge c="grey">counter + web</Badge>);
+function ChannelToggle({ value, onChange }) {
+  return (
+    <div className="col-span-2">
+      <div className="mb-1 text-xs font-medium text-black/60">Where it works</div>
+      <div role="radiogroup" aria-label="Where it works" className="grid grid-cols-3 gap-1 rounded-full bg-black/5 p-1">
+        {CHANNEL_OPTS.map(([k, l]) => (
+          <button key={k} type="button" role="radio" aria-checked={(value || 'both') === k} onClick={() => onChange(k)}
+            className={cx('rounded-full px-2 py-1.5 text-xs font-semibold transition-colors', (value || 'both') === k ? 'bg-ink text-white' : 'text-black/60 hover:text-ink')}>{l}</button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function Coupons({ orders, nav }) {
   const list = useApi('/t/coupons');
   const [edit, setEdit] = useState(null);
   const t = today();
@@ -404,14 +443,14 @@ function Offers({ orders }) {
   const state = (c) => (!c.active ? ['grey', 'Off'] : c.ends && c.ends < t ? ['grey', 'Expired'] : c.starts && c.starts > t ? ['blue', 'Scheduled'] : ['green', 'Live']);
   const patch = (c, p) => api('/t/coupons', { id: c.id, ...p }).then(list.reload, fail);
   return (
-    <Wrap title="Offers & coupons" actions={<Btn v="primary" onClick={() => setEdit({})}>+ New coupon</Btn>}>
-      <p className="mb-3 max-w-3xl text-sm text-black/55">Customers type the code at checkout. The website checks every rule again when the order is placed. <b>Show on website</b> lists the
-        code on the home page and in the top bar. To discount a single product, lower its price below MRP in Products.</p>
+    <Wrap nav={nav} title="Coupons" actions={<Btn v="primary" onClick={() => setEdit({})}>+ New coupon</Btn>}>
+      <p className="mb-3 max-w-3xl text-sm text-black/55">Customers type the code at website checkout, or the cashier taps it on the bill. Every rule is checked again when the bill or order is saved.
+        <b> Show on website</b> lists the code on the home page and in the top bar. To discount a single product, lower its price below MRP in Products.</p>
       <div className="card">
         <Table rows={list.data} onRow={setEdit} empty="No coupons yet. Create one like WELCOME10 for first orders." columns={[
           { k: 'code', label: 'Code', r: (c) => <span className="font-mono font-semibold">{c.code}</span> },
           { k: 'offer', label: 'Offer', r: (c) => <div>{offerText(c)}<div className="text-[11px] text-black/45">{[c.starts && `from ${c.starts}`, c.ends && `till ${c.ends}`, c.usage_limit && `${c.usage_limit} uses`, c.per_phone && `${c.per_phone}/customer`].filter(Boolean).join(' · ')}</div></div> },
-          { k: 'state', label: 'Status', r: (c) => { const [col, l] = state(c); return <span className="flex gap-1"><Badge c={col}>{l}</Badge>{c.public && <Badge c="brand">on website</Badge>}</span>; } },
+          { k: 'state', label: 'Status', r: (c) => { const [col, l] = state(c); return <span className="flex flex-wrap gap-1"><Badge c={col}>{l}</Badge><ChannelBadge c={c.channel} />{c.public && c.channel !== 'counter' && <Badge c="brand">listed</Badge>}</span>; } },
           { k: 'uses', label: 'Used', right: true, r: (c) => stats(c.code).uses },
           { k: 'discount', label: 'Discount given', right: true, r: (c) => <Money v={stats(c.code).discount} /> },
           { k: 'revenue', label: 'Orders value', right: true, r: (c) => <Money v={stats(c.code).revenue} /> },
@@ -426,7 +465,7 @@ function Offers({ orders }) {
   );
 }
 function CouponForm({ c, others, onClose, onSaved }) {
-  const [f, , bind] = useForm({ code: '', kind: 'percent', value: '', min_order: '', max_discount: '', starts: '', ends: '', usage_limit: '', per_phone: '1', active: true, public: false, note: '', ...c });
+  const [f, set, bind] = useForm({ code: '', kind: 'percent', value: '', min_order: '', max_discount: '', starts: '', ends: '', usage_limit: '', per_phone: '1', active: true, public: false, note: '', channel: 'both', ...c });
   const preview = (() => {
     try { const row = checkCoupon(f, others); return [500, 1000, 2500].map((s) => { try { return `₹${s} cart → saves ${inr(couponDiscount(row, s, { today: today() }))}`; } catch { return `₹${s} cart → not eligible`; } }); }
     catch (e) { return [e.message]; }
@@ -439,6 +478,7 @@ function CouponForm({ c, others, onClose, onSaved }) {
     <Modal title={c.id ? 'Edit coupon' : 'New coupon'} onClose={onClose}>
       <form onSubmit={submit} className="grid grid-cols-2 gap-3">
         <Field label="Code" {...bind('code')} required className="col-span-2" placeholder="DIWALI10" hint="Letters and numbers, no spaces" />
+        <ChannelToggle value={f.channel} onChange={(v) => set('channel', v)} />
         <Field label="Type"><select className="input" {...bind('kind')}><option value="percent">% off</option><option value="flat">₹ off</option></select></Field>
         <Field label={f.kind === 'percent' ? 'Percent off' : 'Rupees off'} {...bind('value')} required inputMode="decimal" />
         <Field label="Minimum order (₹)" {...bind('min_order')} inputMode="decimal" />
@@ -449,11 +489,189 @@ function CouponForm({ c, others, onClose, onSaved }) {
         <Field label="Uses per customer" {...bind('per_phone')} inputMode="numeric" hint="By phone number. Blank = unlimited" />
         <Field label="Note (shown with the offer)" {...bind('note')} className="col-span-2" />
         <label className="flex items-center gap-2 text-sm"><input {...bind('active', 'checkbox')} /> Active</label>
-        <label className="flex items-center gap-2 text-sm"><input {...bind('public', 'checkbox')} /> Show on website</label>
+        <label className="flex items-center gap-2 text-sm"><input {...bind('public', 'checkbox')} /> Show on website{f.channel === 'counter' ? ' (as “in store only”)' : ''}</label>
         <ul className="col-span-2 rounded-[10px] bg-paper p-3 text-xs text-black/60">{preview.map((p) => <li key={p}>{p}</li>)}</ul>
         <div className="col-span-2 flex justify-end gap-2"><Btn onClick={onClose}>Cancel</Btn><Btn v="primary" type="submit">Save coupon</Btn></div>
       </form>
     </Modal>
+  );
+}
+
+// ---------- Combos ----------
+// A set of items for one price, at the counter and on the website (place_order prices it again). Never below what the items cost.
+function Combos({ nav }) {
+  const list = useApi('/t/offers');
+  const items = useApi('/items');
+  const ideas = useApi('/reports/x/combo_ideas');
+  const [edit, setEdit] = useState(null);
+  const byId = useMemo(() => new Map((items.data || []).map((i) => [i.id, i])), [items.data]);
+  const combos = (list.data || []).filter((o) => o.kind === 'combo');
+  const value = (o) => round2(o.items.reduce((s, x) => s + (byId.get(x.item_id)?.sale_price || 0) * x.qty, 0));
+  const t = today();
+  const state = (o) => (!o.active ? ['grey', 'Off'] : o.ends && o.ends < t ? ['grey', 'Ended'] : o.starts && o.starts > t ? ['blue', 'Scheduled'] : ['green', 'Live']);
+  return (
+    <Wrap nav={nav} title="Combos" actions={<Btn v="primary" onClick={() => setEdit({ kind: 'combo', items: [] })}>+ New combo</Btn>}>
+      <p className="mb-3 max-w-3xl text-sm text-black/55">Bought together, the items cost the combo price. It applies by itself at the counter and on the website, and shows on each item’s product page.
+        A combo can cut your margin but never go below what the items cost you.</p>
+      <div className="card">
+        <Table rows={combos} onRow={setEdit} empty="No combos yet. Start from an idea below." columns={[
+          { k: 'name', label: 'Combo', r: (o) => <div><div className="font-semibold">{o.name}</div><div className="text-[11px] text-black/45">{o.items.map((x) => `${x.qty > 1 ? x.qty + '× ' : ''}${byId.get(x.item_id)?.name || 'Removed item'}`).join(' + ')}</div></div> },
+          { k: 'price', label: 'Combo price', right: true, r: (o) => <Money v={o.price} className="font-semibold" /> },
+          { k: 'value', label: 'Bought separately', right: true, r: (o) => <Money v={value(o)} className="text-black/50 line-through" /> },
+          { k: 'saving', label: 'Customer saves', right: true, r: (o) => <span className="font-medium text-emerald-700">{inr(value(o) - o.price)}</span> },
+          { k: 'state', label: 'Status', r: (o) => { const [c, l] = state(o); return <span className="flex flex-wrap gap-1"><Badge c={c}>{l}</Badge><ChannelBadge c={o.channel} /></span>; } },
+          { label: '', r: (o) => <div className="flex justify-end" onClick={(e) => e.stopPropagation()}><Switch on={o.active} onChange={(v) => api('/t/offers', { id: o.id, active: v }).then(list.reload, fail)} label="Active" /></div> },
+        ]} />
+      </div>
+      {ideas.data?.length > 0 && <>
+        <h3 className="mb-2 mt-6 text-sm font-semibold">Ideas from what customers buy together (90 days)</h3>
+        <div className="card"><Table rows={ideas.data} columns={[
+          { k: 'items', label: 'Bought together' }, { k: 'bills', label: 'Bills', right: true },
+          { label: '', r: (x) => <div className="flex justify-end"><Btn size="sm" onClick={() => setEdit({ kind: 'combo', name: '', items: [{ item_id: x.a, qty: 1 }, { item_id: x.b, qty: 1 }] })}>Make a combo</Btn></div> },
+        ]} /></div>
+      </>}
+      {edit && <ComboForm o={edit} items={items.data || []} byId={byId} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); list.reload(); }} />}
+    </Wrap>
+  );
+}
+function ComboForm({ o, items, byId, onClose, onSaved }) {
+  const [f, set, bind] = useForm({ name: '', price: '', starts: '', ends: '', active: true, note: '', channel: 'both', ...o, items: o.items || [] });
+  const [pick, setPick] = useState('');
+  const costIncl = (i) => (i?.purchase_price || 0) * (1 + (i?.gst_rate || 0) / 100);
+  const value = round2(f.items.reduce((s, x) => s + (byId.get(x.item_id)?.sale_price || 0) * x.qty, 0));
+  const cost = round2(f.items.reduce((s, x) => s + costIncl(byId.get(x.item_id)) * x.qty, 0));
+  const noCost = f.items.some((x) => !(byId.get(x.item_id)?.purchase_price > 0));
+  const price = +f.price || 0; // price and cost both include GST, so (price − cost) / price is the margin
+  const add = () => { const it = items.find((i) => i.name === pick); if (!it) return toast('Pick an item from the list', 'err'); if (!f.items.some((x) => x.item_id === it.id)) set('items', [...f.items, { item_id: it.id, qty: 1 }]); setPick(''); };
+  const submit = async (e) => {
+    e.preventDefault();
+    try { await api('/t/offers', { ...f, kind: 'combo', price: +f.price, starts: f.starts || null, ends: f.ends || null }); toast('Combo saved'); onSaved(); } catch (err) { fail(err); }
+  };
+  return (
+    <Modal wide title={o.id ? `Edit ${o.name}` : 'New combo'} onClose={onClose}>
+      <form onSubmit={submit} className="grid grid-cols-2 gap-3">
+        <Field label="Name customers see" {...bind('name')} required autoFocus className="col-span-2" placeholder="Gym starter: Whey + Shaker" />
+        <div className="col-span-2">
+          <div className="mb-1 text-xs font-medium text-black/60">Items in the combo</div>
+          <ul className="divide-y divide-line rounded-xl border border-line">
+            {f.items.map((x, i) => { const it = byId.get(x.item_id); return (
+              <li key={x.item_id} className="flex items-center gap-2 px-3 py-2 text-sm">
+                <span className="min-w-0 flex-1 truncate">{it?.name || 'Removed item'} <span className="text-xs text-black/45">{inr(it?.sale_price)} each · {it?.stock ?? 0} in stock</span></span>
+                <input className="input w-16 text-center" inputMode="numeric" value={x.qty} aria-label="Quantity" onChange={(e) => set('items', f.items.map((y, j) => (j === i ? { ...y, qty: Math.max(1, +e.target.value || 1) } : y)))} />
+                <button type="button" className="px-1 text-black/40 hover:text-red-600" onClick={() => set('items', f.items.filter((_, j) => j !== i))} aria-label="Remove">✕</button>
+              </li>); })}
+            {!f.items.length && <li className="px-3 py-3 text-sm text-black/45">Add two or more items</li>}
+          </ul>
+          <div className="mt-2 flex gap-2">
+            <input className="input" list="combo-items" value={pick} onChange={(e) => setPick(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } }} placeholder="Type an item name, then Enter" />
+            <datalist id="combo-items">{items.map((i) => <option key={i.id} value={i.name} />)}</datalist>
+            <Btn onClick={add}>Add</Btn>
+          </div>
+        </div>
+        <Field label="Combo price (incl. GST)" {...bind('price')} required inputMode="decimal" hint={`Bought separately: ${inr(value)}`} />
+        <div className="self-end rounded-xl bg-paper px-3 py-2 text-sm">
+          {price > 0 && value > 0 && <div>Customer saves <b className="text-emerald-700">{inr(value - price)}</b> ({Math.round(((value - price) / value) * 100)}%)</div>}
+          {price > 0 && !noCost && <div className={price < cost ? 'font-semibold text-red-600' : 'text-black/60'}>{price < cost ? `Below your cost of ${inr(cost)}` : `Your margin about ${Math.round(((price - cost) / price) * 100)}% · cost ${inr(cost)}`}</div>}
+          {noCost && <div className="text-xs text-amber-700">Some items have no cost price, so the margin can’t be checked.</div>}
+        </div>
+        <Field label="Starts" {...bind('starts', 'date')} />
+        <Field label="Ends" {...bind('ends', 'date')} />
+        <ChannelToggle value={f.channel} onChange={(v) => set('channel', v)} />
+        <label className="col-span-2 flex items-center gap-2 text-sm"><input {...bind('active', 'checkbox')} /> Active</label>
+        <div className="col-span-2 flex justify-end gap-2">
+          {o.id && <DeleteBtn bin={false} what={o.name} onDelete={() => api('/t/offers/' + o.id, null, 'DELETE').then(() => { toast('Combo deleted'); onSaved(); }, fail)} />}
+          <Btn onClick={onClose}>Cancel</Btn><Btn v="primary" type="submit">Save combo</Btn>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+// ---------- Near-expiry offers ----------
+// Worked out per batch: the closer to expiry, the bigger the discount, but never below cost + the minimum margin. Nothing goes live
+// until a staff member or the owner approves it; then billing applies it to that batch and prints the expiry on the bill.
+function ExpiryOffers({ boot, admin, nav }) {
+  const list = useApi('/reports/x/expiry_offers');
+  const [pcts, setPcts] = useState({});
+  const cfg = { ...EXPIRY_DEFAULTS, ...boot.branch?.settings?.expiry_offers };
+  const rows = list.data || [];
+  const by = (st) => rows.filter((r) => r.status === st);
+  const key = (r) => `${r.item_id}|${r.batch_no}|${r.expiry}`;
+  const approve = (r) => {
+    const pct = +(pcts[key(r)] ?? r.pct);
+    const o = { kind: 'expiry', item_id: r.item_id, batch_no: r.batch_no || null, expiry: r.expiry, discount_pct: pct, active: true, approved_by: boot.user.name };
+    api('/t/offers', { ...(r.offer && { id: r.offer.id }), ...o, note: expiryNote(o) }).then(() => { toast(`${pct}% off ${r.item} is live`); list.reload(); }, fail);
+  };
+  const dismiss = (r) => api('/t/offers', { ...(r.offer && { id: r.offer.id }), kind: 'expiry', item_id: r.item_id, batch_no: r.batch_no || null, expiry: r.expiry, discount_pct: r.pct || 1, active: false, approved_by: boot.user.name, note: 'Dismissed' })
+    .then(() => { toast('Dismissed'); list.reload(); }, fail);
+  const stop = (r) => api('/t/offers', { id: r.offer.id, active: false }).then(list.reload, fail);
+  const days = (r) => (r.days_left === 0 ? 'today' : `${r.days_left} days`);
+  return (
+    <Wrap nav={nav} title="Near-expiry offers" actions={<Btn onClick={() => window.open('#/offer-labels', '_blank', 'width=900,height=900')} disabled={!by('live').length}>Print shelf labels</Btn>}>
+      <div className="mb-4 max-w-4xl rounded-xl bg-paper px-4 py-3 text-sm text-black/65">
+        Suggested from each batch’s expiry: {cfg.steps.map(([d, p]) => `${p}% off within ${d} days`).join(', ')}, never below cost + {cfg.min_margin}% margin.
+        Approve to switch an offer on; billing then applies it to that batch and prints <i>“Near-expiry offer · Expires DD MMM YYYY · Batch”</i> on the bill.
+        The pack label and its expiry date stay as they are, and nothing is sold after its expiry date.
+      </div>
+      {list.loading && !list.data ? <Loading /> : <>
+        <h3 className="mb-2 text-sm font-semibold">Waiting for approval · {by('suggested').length}</h3>
+        <div className="card mb-6"><Table rows={by('suggested')} empty="Nothing to approve. Batches show here as they come within the window." columns={[
+          { k: 'item', label: 'Item / batch', r: (r) => <div><div className="font-medium">{r.item}</div><div className="text-[11px] text-black/45">Batch {r.batch_no || '—'} · {r.qty} in stock</div></div> },
+          { k: 'expiry', label: 'Expires', r: (r) => <div>{r.expiry}<div className={cx('text-[11px]', r.days_left <= 15 ? 'font-semibold text-red-600' : 'text-black/45')}>in {days(r)}</div></div> },
+          { k: 'pct', label: '% off', r: (r) => <input className="input w-20 py-1 text-right" inputMode="decimal" value={pcts[key(r)] ?? r.pct} onChange={(e) => setPcts({ ...pcts, [key(r)]: e.target.value })} aria-label={`Discount for ${r.item}`} /> },
+          { k: 'offer_price', label: 'Offer price', right: true, r: (r) => { const pr = Math.round(r.price * (1 - (+(pcts[key(r)] ?? r.pct) || 0) / 100)); return <div><Money v={pr} className="font-semibold" /><div className="text-[11px] text-black/40 line-through">{inr(r.price)}</div></div>; } },
+          { k: 'margin_pct', label: 'Margin left', right: true, r: (r) => (r.no_cost ? <span className="text-xs text-amber-700">no cost price</span> : `${r.margin_pct}%`) },
+          { k: 'recovered', label: 'Brings in', right: true, r: (r) => <div><Money v={r.recovered} /><div className="text-[11px] text-black/45">vs {inr(r.at_risk)} lost if it expires</div></div> },
+          { label: '', r: (r) => <div className="flex justify-end gap-1"><Btn size="sm" v="primary" onClick={() => approve(r)}>Approve</Btn><Btn size="sm" v="ghost" onClick={() => dismiss(r)}>Dismiss</Btn></div> },
+        ]} /></div>
+        <h3 className="mb-2 text-sm font-semibold">Live · {by('live').length}</h3>
+        <div className="card mb-6"><Table rows={by('live')} empty="No live offers." columns={[
+          { k: 'item', label: 'Item / batch', r: (r) => <div><div className="font-medium">{r.item}</div><div className="text-[11px] text-black/45">Batch {r.batch_no || '—'} · {r.qty} left · approved by {r.offer?.approved_by || '—'}</div></div> },
+          { k: 'expiry', label: 'Expires', r: (r) => `${r.expiry} (${days(r)})` },
+          { k: 'pct', label: 'Offer', r: (r) => `${r.pct}% off · ${inr(r.offer_price)}` },
+          { label: '', r: (r) => <div className="flex justify-end"><Btn size="sm" onClick={() => stop(r)}>Stop</Btn></div> },
+        ]} /></div>
+        {by('return').length > 0 && <>
+          <h3 className="mb-2 text-sm font-semibold">Better returned to the supplier · {by('return').length}</h3>
+          <div className="card mb-6"><Table rows={by('return')} columns={[
+            { k: 'item', label: 'Item / batch', r: (r) => `${r.item} · ${r.batch_no || '—'}` }, { k: 'expiry', label: 'Expires' }, { k: 'qty', label: 'Qty', right: true },
+            { k: 'advice', label: 'Why', r: (r) => <span className="text-xs">{r.advice}</span> },
+          ]} /></div>
+        </>}
+        {by('expired').length > 0 && <>
+          <h3 className="mb-2 text-sm font-semibold text-red-700">Expired: take off the shelf · {by('expired').length}</h3>
+          <div className="card border-red-200"><Table rows={by('expired')} columns={[
+            { k: 'item', label: 'Item / batch', r: (r) => `${r.item} · ${r.batch_no || '—'}` }, { k: 'expiry', label: 'Expired on' }, { k: 'qty', label: 'Qty', right: true },
+            { k: 'advice', label: 'What to do', r: (r) => <span className="text-xs">{r.advice}</span> },
+          ]} /></div>
+        </>}
+      </>}
+    </Wrap>
+  );
+}
+
+// Shelf labels for live near-expiry offers (print on A4 and cut). States the expiry date plainly next to the offer price.
+export function OfferLabels({ branch }) {
+  const [rows, setRows] = useState(null);
+  useEffect(() => { api('/reports/x/expiry_offers').then((r) => setRows(r.filter((x) => x.status === 'live'))); }, []);
+  useEffect(() => { if (rows?.length) setTimeout(() => window.print(), 200); }, [rows]);
+  if (!rows) return null;
+  const d = (x) => new Date(x + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+  return (
+    <div className="mx-auto grid max-w-[190mm] grid-cols-2 gap-3 bg-white p-4 text-black">
+      <style>{'@page { size: A4; margin: 8mm; }'}</style>
+      {rows.map((r) => (
+        <div key={r.item_id + r.batch_no + r.expiry} className="break-inside-avoid rounded-lg border-2 border-black p-3">
+          <div className="text-xs font-bold uppercase tracking-wide">Near-expiry offer · {r.pct}% off</div>
+          <div className="mt-1 text-base font-semibold leading-tight">{r.item}</div>
+          <div className="mt-2 flex items-baseline gap-2"><span className="text-3xl font-bold">₹{r.offer_price}</span>
+            <span className="text-sm line-through">₹{r.price}</span>{r.mrp > 0 && <span className="text-xs">MRP ₹{r.mrp}</span>}</div>
+          <div className="mt-2 border-t border-black pt-1 text-sm font-semibold">Expires on {d(r.expiry)}</div>
+          <div className="text-[11px]">Batch {r.batch_no || '—'} · Use before the expiry date · Price incl. all taxes · {branch?.name}</div>
+        </div>
+      ))}
+      {!rows.length && <p>No live near-expiry offers.</p>}
+    </div>
   );
 }
 
@@ -545,6 +763,8 @@ function Banners({ store, saveStore }) {
                 <Field label="Subtitle" value={b.subtitle || ''} onChange={(e) => upd(i, 'subtitle', e.target.value)} />
                 <Field label="Image URL" value={b.image || ''} onChange={(e) => upd(i, 'image', e.target.value)} />
                 <Field label="Link" value={b.link || ''} onChange={(e) => upd(i, 'link', e.target.value)} placeholder="/shop?category=…" />
+                <Field label="Offer on this banner works" className="col-span-2"><select className="input" value={b.where || ''} onChange={(e) => upd(i, 'where', e.target.value)}>
+                  <option value="">Not an offer</option><option value="both">In store &amp; online</option><option value="counter">In store only</option><option value="online">Online only</option></select></Field>
               </div>
               <div className="mt-2 flex gap-2 text-xs">
                 <button disabled={!i} className="rounded px-2 py-1 hover:bg-black/5 disabled:opacity-30" onClick={() => mv(i, -1)}>↑ Up</button>
@@ -605,7 +825,7 @@ function StoreSettings({ boot, ob, store, saveStore, reload }) {
 // ---------- Inbox: reviews, messages, back-in-stock requests (website → submit_feedback) ----------
 const TABS = [['review', 'Reviews'], ['message', 'Messages'], ['restock', 'Back in stock']];
 const star = (n) => '★★★★★'.slice(0, n) + '☆☆☆☆☆'.slice(0, 5 - n);
-function Inbox({ inbox, store }) {
+export function Inbox({ inbox, store }) {
   const items = useApi('/items');
   const [tab, setTab] = useState(new URLSearchParams(location.hash.split('?')[1]).get('tab') || 'review');
   const [show, setShow] = useState('new');

@@ -27,8 +27,11 @@
 
 @layer base {
   body { @apply bg-paper font-sans text-ink antialiased; font-feature-settings: "tnum"; }
-  input, select, textarea { @apply outline-none; }
-  :focus-visible { @apply outline-2 outline-offset-1 outline-ink; }
+  /* text boxes show focus with their own ring (.input); everything else gets a green outline that reads on white and on the dark sidebar */
+  input:not([type=checkbox]):not([type=radio]), select, textarea { @apply outline-none; }
+  :focus-visible { @apply outline-2 outline-offset-2 outline-brand-d; }
+  aside :focus-visible, .bg-ink :focus-visible { @apply outline-brand; }
+  tr:focus-visible { @apply bg-brand/15 outline-none; box-shadow: inset 3px 0 0 var(--color-brand-d); }
 }
 
 @utility input {
@@ -38,10 +41,15 @@
 @utility display { font-family: var(--font-display); font-weight: 600; letter-spacing: -0.02em; word-spacing: 0.08em; line-height: 1; }
 
 @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
-.rise { animation: rise .14s cubic-bezier(.2,.8,.2,1) both; }
+/* backwards, not both: holding the end transform would turn every page into a containing block for fixed overlays */
+.rise { animation: rise .14s cubic-bezier(.2,.8,.2,1) backwards; }
 
 @media print {
   @page { margin: 8mm; }
   .no-print { display: none !important; }
   body { background: white; }
 }
+
+/* Scrollbars: thin and quiet everywhere; light on the dark sidebars (no white bar next to the menu). */
+* { scrollbar-width: thin; scrollbar-color: rgb(0 0 0 / 0.18) transparent; }
+.bg-ink, .bg-ink *, .scroll-dark { scrollbar-color: rgb(255 255 255 / 0.16) transparent; }

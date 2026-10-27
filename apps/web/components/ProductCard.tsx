@@ -12,8 +12,8 @@ export default function ProductCard({ p }: { p: Product }) {
   const v = p.variants.find((x) => x.stock > 0) || p.variants[0];
   return (
     <article className="group flex h-full flex-col">
-      <Link href={`/p/${p.key}`} className="relative block aspect-[4/5] overflow-hidden rounded-[var(--radius-card)]">
-        <div className="h-full w-full transition-transform duration-500 ease-out-expo group-hover:scale-[1.03]">
+      <Link href={`/p/${p.key}`} className="lift relative block aspect-[4/5] overflow-hidden rounded-[var(--radius-card)]">
+        <div className="h-full w-full transition-transform duration-500 ease-out-expo group-hover:scale-[1.06]">
           <ProductShot brand={p.brand} name={p.name} size={v.size} image={v.image} />
         </div>
         {!p.inStock && <span className="absolute inset-x-0 bottom-0 bg-ink/85 py-2 text-center text-xs font-semibold text-white">Out of stock</span>}
@@ -26,7 +26,7 @@ export default function ProductCard({ p }: { p: Product }) {
             <span className="text-lg font-bold tabular-nums">{rupees(p.price)}</span>
             {off > 0 && <><span className="text-sm text-mute line-through tabular-nums">{rupees(p.mrp)}</span><span className="text-sm font-semibold text-brand-deep">{off}% off</span></>}
           </div>
-          {p.inStock && <QuickAdd line={{ id: v.id, key: p.key, name: p.name, variant: [v.size, v.flavour].filter(Boolean).join(' · '), price: v.price, mrp: v.mrp, brand: p.brand, stock: v.stock }} />}
+          {p.inStock && <QuickAdd line={{ id: v.id, key: p.key, name: p.name, variant: [v.size, v.flavour].filter(Boolean).join(' · '), price: v.price, mrp: v.mrp, brand: p.brand, stock: v.stock, bulkPrice: v.bulkPrice, bulkMin: v.bulkMin }} />}
         </div>
       </div>
     </article>

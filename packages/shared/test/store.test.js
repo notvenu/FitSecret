@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { checkCoupon, couponDiscount, orderTotals, customersFromOrders, couponError, STORE_DEFAULTS } from '../store.js';
+import { checkCoupon, couponDiscount, orderTotals, customersFromOrders, couponError, STORE_DEFAULTS, unitPrice } from '../store.js';
 
 test('coupon validation and discount rules', () => {
   const c = checkCoupon({ code: ' fit10 ', kind: 'percent', value: '10', max_discount: '200', min_order: '500', active: true });
@@ -28,4 +28,14 @@ test('shipping on the discounted amount; customers grouped by phone', () => {
     { id: 3, phone: '9000000002', name: 'Sita', total: 900, status: 'placed', created_at: '2026-10-03' },
   ]);
   assert.deepEqual(cs.map((c) => [c.name, c.orders, c.spent, c.account]), [['Sita', 1, 900, false], ['Ravi K', 2, 500, true]]);
+});
+
+test('unit price: buyer rate or % off, bulk price from its quantity when lower', () => {
+  const it = { id: 'w', sale_price: 1000, wholesale_price: 900, wholesale_min_qty: 3 };
+  assert.equal(unitPrice(it, 1, null), 1000);
+  assert.equal(unitPrice(it, 3, null), 900, 'bulk from 3');
+  assert.equal(unitPrice(it, 1, { price_discount: 5, rates: null }), 950);
+  assert.equal(unitPrice(it, 3, { price_discount: 5, rates: null }), 900, 'bulk wins when lower');
+  assert.equal(unitPrice(it, 5, { price_discount: 0, rates: { w: 850 } }), 850, 'own rate wins when lower');
+  assert.equal(unitPrice({ id: 'x', sale_price: 499 }, 50, { price_discount: 10, rates: { w: 1 } }), 449.1, 'no bulk price set');
 });

@@ -4,8 +4,8 @@ import { WhatsappLogo, PaperPlaneTilt, CheckCircle, CircleNotch } from '@phospho
 import { useSubmit } from '@/components/Feedback';
 
 // Saved to the POS inbox (Online Store → Inbox); WhatsApp stays as the instant option.
-export default function EnquiryForm({ phone }: { phone: string }) {
-  const [f, setF] = useState({ name: '', mobile: '', topic: 'Product question', message: '', order_no: '' });
+export default function EnquiryForm({ phone, topic = 'Product question', placeholder }: { phone: string; topic?: string; placeholder?: string }) {
+  const [f, setF] = useState({ name: '', mobile: '', topic, message: '', order_no: '' });
   const { busy, err, done, send: save } = useSubmit('message');
   const send = (e: React.FormEvent) => {
     e.preventDefault();
@@ -30,7 +30,7 @@ export default function EnquiryForm({ phone }: { phone: string }) {
         </select>
       </label>
       <label className="grid gap-2 text-sm"><span className="text-mute">Message</span>
-        <textarea className="field" rows={4} required maxLength={800} value={f.message} onChange={(e) => setF({ ...f, message: e.target.value })} />
+        <textarea className="field" rows={4} required maxLength={800} placeholder={placeholder} value={f.message} onChange={(e) => setF({ ...f, message: e.target.value })} />
       </label>
       {f.topic === 'My order' && (
         <label className="grid gap-2 text-sm"><span className="text-mute">Order number</span>

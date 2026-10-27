@@ -6,11 +6,15 @@ import { getMeta, setMeta, applyRemote } from './db.js';
 
 const BATCH = 500;
 
+// One table at a time: a table the cloud rejects (e.g. a migration not run yet) keeps its rows queued and is reported,
+// but never holds back the others (one bad branch row once stopped every bill from syncing).
 export async function pushOnce(db, rpc) {
   let sent = 0;
+  const failed = new Map(); // table -> error
   for (;;) {
-    const box = db.prepare('select id, tbl, row_id from outbox order by id limit ?').all(BATCH);
-    if (!box.length) return sent;
+    const skip = [...failed.keys()];
+    const box = db.prepare(`select id, tbl, row_id from outbox ${skip.length ? `where tbl not in (${skip.map(() => '?').join(',')})` : ''} order by id limit ?`).all(...skip, BATCH);
+    if (!box.length) break;
     const payload = {}, seen = new Set();
     for (const { tbl, row_id } of box) {
       if (seen.has(tbl + row_id)) continue; // server can't upsert the same id twice in one statement
@@ -18,10 +22,26 @@ export async function pushOnce(db, rpc) {
       const row = db.prepare(`select * from ${tbl} where id = ?`).get(row_id);
       if (row) (payload[tbl] ??= []).push(toWire(tbl, row));
     }
-    if (Object.keys(payload).length) await rpc('sync_push', { p: payload });
-    db.prepare('delete from outbox where id <= ?').run(box.at(-1).id);
-    sent += seen.size;
+    const last = box.at(-1).id;
+    try { // normal case: the whole batch in one transaction (a bill and its lines land together)
+      if (Object.keys(payload).length) await rpc('sync_push', { p: payload });
+      db.prepare(`delete from outbox where id <= ? ${skip.length ? `and tbl not in (${skip.map(() => '?').join(',')})` : ''}`).run(last, ...skip);
+      sent += seen.size;
+      continue;
+    } catch (e) { if (/fetch failed|ENOTFOUND|ECONNREFUSED|ETIMEDOUT|network/i.test(e.message + (e.cause?.code || ''))) throw e; }
+    for (const tbl of new Set(box.map((b) => b.tbl))) { // rejected: find which table, send the rest
+      try {
+        if (payload[tbl]) await rpc('sync_push', { p: { [tbl]: payload[tbl] } });
+        db.prepare('delete from outbox where tbl = ? and id <= ?').run(tbl, last);
+        sent += payload[tbl]?.length || 0;
+      } catch (e) {
+        if (/fetch failed|ENOTFOUND|ECONNREFUSED|ETIMEDOUT|network/i.test(e.message + (e.cause?.code || ''))) throw e; // offline: try everything later
+        failed.set(tbl, e.message);
+      }
+    }
   }
+  if (failed.size) throw new Error([...failed].map(([t, m]) => `${t}: ${m}`).join('; '));
+  return sent;
 }
 
 export async function pullOnce(db, rpc) {
@@ -41,6 +61,9 @@ export function createSync(db, { interval = 10000, log = console, afterPull } = 
   let client = null, clientKey = '', running = false, timer = null, kickTimer = null;
 
   const config = () => JSON.parse(getMeta(db, 'sync_config') || '{}');
+  // a password is never kept on disk: older setups that stored one have it moved to memory and used for one sign-in
+  let password = null;
+  { const { password: old, ...rest } = config(); if (old) { password = old; setMeta(db, 'sync_config', JSON.stringify(rest)); } }
 
   async function rpc(name, args) {
     const { data, error } = await client.rpc(name, args);
@@ -48,12 +71,22 @@ export function createSync(db, { interval = 10000, log = console, afterPull } = 
     return data;
   }
 
+  // The password is used once, to sign in; from then on only Supabase's refresh token is kept (it rotates on every refresh and
+  // can be revoked by signing the user out in Supabase). Nothing on this PC opens the account if the password changes.
+  const keepToken = (refresh) => { const c = config(); if (c.url) setMeta(db, 'sync_config', JSON.stringify({ url: c.url, anonKey: c.anonKey, email: c.email, refresh })); };
   async function connect(cfg) {
     const key = [cfg.url, cfg.anonKey, cfg.email].join('|');
     if (client && clientKey === key) return;
     client = createClient(cfg.url, cfg.anonKey, { auth: { persistSession: false, autoRefreshToken: true } });
-    const { error } = await client.auth.signInWithPassword({ email: cfg.email, password: cfg.password });
-    if (error) { client = null; throw new Error('Login failed: ' + error.message); }
+    client.auth.onAuthStateChange((_e, s) => { if (s?.refresh_token) keepToken(s.refresh_token); });
+    const { data, error } = password ? await client.auth.signInWithPassword({ email: cfg.email, password })
+      : cfg.refresh ? await client.auth.refreshSession({ refresh_token: cfg.refresh }) : { error: { message: 'no password' } };
+    if (error) {
+      client = null;
+      throw new Error(password ? 'Login failed: ' + error.message : 'Cloud sign-in expired: enter the sync password again in Settings → Cloud sync');
+    }
+    password = null;
+    if (data?.session?.refresh_token) keepToken(data.session.refresh_token);
     clientKey = key;
   }
 
@@ -81,11 +114,25 @@ export function createSync(db, { interval = 10000, log = console, afterPull } = 
 
   return {
     status: () => ({ ...status, configured: !!config().url, url: config().url || '', email: config().email || '' }),
-    configure(cfg) { setMeta(db, 'sync_config', cfg ? JSON.stringify(cfg) : null); client = null; return run(); },
+    configure(cfg) {
+      const { password: pw, ...rest } = cfg || {};
+      setMeta(db, 'sync_config', cfg ? JSON.stringify(rest) : null); password = pw || null; client = null; return run();
+    },
     run,
     // Debounced nudge after local writes so the cloud copy follows within ~1.5s when online.
     kick() { clearTimeout(kickTimer); kickTimer = setTimeout(run, 1500); },
     start() { run(); timer = setInterval(run, interval); },
+    // Certificate PDFs / photos go to the public 'certificates' bucket so the website can link them. null when not connected.
+    async upload(name, data, type) {
+      const cfg = config();
+      if (!cfg.url) return null;
+      try {
+        await connect(cfg);
+        const { error } = await client.storage.from('certificates').upload(name, data, { contentType: type, upsert: false });
+        if (error) throw error;
+        return client.storage.from('certificates').getPublicUrl(name).data.publicUrl;
+      } catch (e) { log.warn?.('[upload]', e.message); return null; }
+    },
     stop() { clearInterval(timer); clearTimeout(kickTimer); },
   };
 }

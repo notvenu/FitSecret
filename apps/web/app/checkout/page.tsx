@@ -5,7 +5,7 @@ import { useEffect, useState } from 'react';
 import { Money, CreditCard, LockSimple, CircleNotch, Tag, X } from '@phosphor-icons/react';
 import { inr, STATES } from '@fitsecret/shared';
 import { useCart } from '@/components/cart';
-import { QtyStepper, ShipProgress } from '@/components/CartDrawer';
+import { QtyStepper, ShipProgress, LinePrice } from '@/components/CartDrawer';
 import { orderTotals } from '@fitsecret/shared/store';
 import { supabase, orderError } from '@/lib/supabase';
 import { payOnline, onlinePayments } from '@/lib/pay';
@@ -13,7 +13,7 @@ import { payOnline, onlinePayments } from '@/lib/pay';
 const SAVED = 'fs_address_v1';
 
 export default function Checkout() {
-  const { lines, subtotal, ready, clear, store } = useCart();
+  const { lines, subtotal, ready, clear, store, buyer, combo } = useCart();
   const router = useRouter();
   const [f, setF] = useState({ name: '', phone: '', email: '', line1: '', line2: '', city: 'Vijayawada', state: 'Andhra Pradesh', pincode: '', notes: '' });
   const [method, setMethod] = useState<'cod' | 'online'>(onlinePayments ? 'online' : 'cod');
@@ -22,15 +22,23 @@ export default function Checkout() {
   const [code, setCode] = useState('');
   const [coupon, setCoupon] = useState<{ code: string; discount: number } | null>(null);
   const [couponErr, setCouponErr] = useState('');
+  const [points, setPoints] = useState(0); // ₹ of loyalty points the signed-in customer has (my_points, migration 0013)
+  const [usePoints, setUsePoints] = useState(false);
   const sb = supabase();
 
   useEffect(() => {
     try { setF((x) => ({ ...x, ...JSON.parse(localStorage.getItem(SAVED) || '{}'), notes: '' })); } catch {}
-    sb?.auth.getUser().then(({ data }) => data.user?.email && setF((x) => ({ ...x, email: x.email || data.user!.email! })));
+    sb?.auth.getUser().then(({ data }) => {
+      if (!data.user?.email) return;
+      setF((x) => ({ ...x, email: x.email || data.user!.email! }));
+      sb.rpc('my_points').then(({ data: p }) => setPoints(Number(p?.value) || 0)); // null / error (older database): no points box
+    });
   }, [sb]);
 
   // place_order recomputes all of this on the server; this is the preview
-  const t = orderTotals(subtotal, coupon?.discount || 0, store);
+  const t0 = orderTotals(subtotal, combo.total + (coupon?.discount || 0), store); // combos first, then the coupon on what's left
+  const pts = usePoints ? Math.min(points, Math.max(0, t0.total - t0.shipping)) : 0; // points pay for goods, not delivery
+  const t = { ...t0, total: t0.total - pts };
   const codOk = store.cod_enabled && t.total <= store.cod_limit;
   const short = store.min_order > subtotal ? store.min_order - subtotal : 0;
   useEffect(() => { if (!codOk && onlinePayments) setMethod('online'); }, [codOk]);
@@ -39,11 +47,11 @@ export default function Checkout() {
     setCouponErr('');
     if (!c.trim()) return setCoupon(null);
     if (!sb) return setCouponErr('Coupons work once online ordering opens.');
-    const { data, error } = await sb.rpc('check_coupon', { p_code: c, p_subtotal: subtotal, p_phone: f.phone || null });
+    const { data, error } = await sb.rpc('check_coupon', { p_code: c, p_subtotal: subtotal - combo.total, p_phone: f.phone || null });
     if (error) { setCoupon(null); setCouponErr(orderError(error.message)); } else setCoupon({ code: data.code, discount: Number(data.discount) });
   };
   // cart changed: re-check the applied coupon against the new subtotal
-  useEffect(() => { if (coupon) applyCoupon(coupon.code); }, [subtotal]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (coupon) applyCoupon(coupon.code); }, [subtotal, combo.total]); // eslint-disable-line react-hooks/exhaustive-deps
   const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => setF({ ...f, [k]: e.target.value });
 
   const submit = async (e: React.FormEvent) => {
@@ -53,7 +61,7 @@ export default function Checkout() {
     setBusy(true);
     try {
       const { name, phone, email, notes, ...address } = f;
-      const { data, error } = await sb.rpc('place_order', { p: { name, phone, email, notes, address, payment_method: method, coupon: coupon?.code,
+      const { data, error } = await sb.rpc('place_order', { p: { name, phone, email, notes, address, payment_method: method, coupon: coupon?.code, points: pts || undefined,
         items: lines.map((l) => ({ item_id: l.id, qty: l.qty })) } });
       if (error) throw new Error(orderError(error.message));
       localStorage.setItem(SAVED, JSON.stringify({ ...f, notes: '' }));
@@ -106,8 +114,10 @@ export default function Checkout() {
         </fieldset>
       </div>
 
-      <aside className="self-start rounded-[var(--radius-card)] bg-surface p-6 md:sticky md:top-24">
-        <h2 className="display text-xl">Order summary</h2>
+      <aside className="receipt self-start p-6 md:sticky md:top-24">
+        <p className="text-center font-mono text-xs uppercase tracking-[0.2em] text-mute">Fit Secrets · MG Road</p>
+        <h2 className="mt-1 border-b border-dashed border-ink/25 pb-3 text-center font-mono text-lg font-semibold">Your bill</h2>
+        {buyer && <p className="mt-2 rounded-[10px] bg-brand/15 px-3 py-2 text-sm">Your regular-buyer rates are applied{buyer.name ? `, ${buyer.name}` : ''}.</p>}
         <ul className="mt-5 max-h-80 space-y-4 overflow-y-auto pr-1">
           {lines.map((l) => (
             <li key={l.id} className="flex items-start justify-between gap-3 text-sm">
@@ -116,7 +126,7 @@ export default function Checkout() {
                 <div className="text-xs text-mute">{l.variant}</div>
                 <div className="mt-2"><QtyStepper id={l.id} qty={l.qty} max={l.stock} /></div>
               </div>
-              <span className="tabular-nums">{inr(l.price * l.qty)}</span>
+              <LinePrice l={l} />
             </li>
           ))}
         </ul>
@@ -136,9 +146,17 @@ export default function Checkout() {
           )}
           {couponErr && <p className="mt-2 text-xs text-danger">{couponErr}</p>}
         </div>
+        {points > 0 && (
+          <label className="mt-3 flex cursor-pointer items-center gap-3 rounded-[10px] border border-line px-3 py-2.5 text-sm has-[:checked]:border-brand has-[:checked]:bg-brand/10">
+            <input type="checkbox" checked={usePoints} onChange={(e) => setUsePoints(e.target.checked)} className="h-4 w-4 accent-[var(--color-brand-deep)]" />
+            <span className="flex-1">Use my loyalty points <span className="text-mute">· {inr(points)} available, also at the store counter</span></span>
+          </label>
+        )}
         <dl className="mt-5 space-y-2 border-t border-line pt-5 text-sm">
           <div className="flex justify-between"><dt className="text-mute">Subtotal</dt><dd className="tabular-nums">{inr(subtotal)}</dd></div>
+          {combo.applied.map((c) => <div key={c.id} className="flex justify-between text-brand-deep"><dt>Combo: {c.name}{c.sets > 1 ? ` ×${c.sets}` : ''}</dt><dd className="tabular-nums">−{inr(c.saving)}</dd></div>)}
           {coupon && <div className="flex justify-between text-brand-deep"><dt>Coupon {coupon.code}</dt><dd className="tabular-nums">−{inr(coupon.discount)}</dd></div>}
+          {pts > 0 && <div className="flex justify-between text-brand-deep"><dt>Loyalty points</dt><dd className="tabular-nums">−{inr(pts)}</dd></div>}
           <div className="flex justify-between"><dt className="text-mute">Delivery</dt><dd className="tabular-nums">{t.shipping ? inr(t.shipping) : 'Free'}</dd></div>
           <div className="flex justify-between pt-2 text-lg font-bold"><dt>Total</dt><dd className="tabular-nums">{inr(t.total)}</dd></div>
         </dl>

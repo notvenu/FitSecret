@@ -13,9 +13,22 @@
       "default": "./seed.js"
     },
     "./reports": "./reports.js",
+    "./locations": "./locations.js",
+    "./permissions": "./permissions.js",
+    "./cheques": "./cheques.js",
     "./billparse": "./billparse.js",
     "./barcode": "./barcode.js",
     "./tally": "./tally.js",
+    "./gstjson": "./gstjson.js",
+    "./insights": "./insights.js",
+    "./variants": {
+      "types": "./variants.d.ts",
+      "default": "./variants.js"
+    },
+    "./offers": {
+      "types": "./offers.d.ts",
+      "default": "./offers.js"
+    },
     "./couriers": {
       "types": "./couriers.d.ts",
       "default": "./couriers.js"

@@ -16,7 +16,7 @@ export default function Loyalty({ boot, reload, user }) {
   };
   const total = list.data?.reduce((s, r) => s + r.value, 0) || 0;
   return (
-    <Page title="Loyalty Points" actions={<Btn onClick={() => downloadCsv('loyalty', list.data)}>Export</Btn>}>
+    <Page title="Loyalty Points" hint="Customers earn points on every bill and spend them at the counter (Redeem on the bill)." actions={<Btn onClick={() => downloadCsv('loyalty', list.data)}>Export</Btn>}>
       <div className="grid gap-4 lg:grid-cols-[1fr_320px]">
         <div className="card">
           <div className="flex justify-between border-b border-line px-4 py-2.5 text-sm"><span className="font-semibold">Customers with points</span><span>Outstanding value <Money v={total} className="font-semibold" /></span></div>

@@ -18,6 +18,7 @@ export function checkCoupon(c, others = []) {
   const value = Number(c.value);
   if (!(value > 0) || (c.kind === 'percent' && value > 90)) throw new Error(c.kind === 'percent' ? 'Discount must be 1-90%' : 'Enter the ₹ amount off');
   if (c.starts && c.ends && c.ends < c.starts) throw new Error('End date is before the start date');
+  if (c.channel && !['both', 'counter', 'online'].includes(c.channel)) throw new Error('Pick where the coupon can be used');
   const n = (v) => (v === '' || v == null ? null : Number(v));
   return { ...c, code, value, min_order: n(c.min_order), max_discount: n(c.max_discount), usage_limit: n(c.usage_limit), per_phone: n(c.per_phone) };
 }
@@ -32,6 +33,24 @@ export function couponDiscount(c, subtotal, { today, used = 0, usedByPhone = 0 }
   let d = c.kind === 'percent' ? round2((subtotal * c.value) / 100) : c.value;
   if (c.max_discount != null) d = Math.min(d, c.max_discount);
   return round2(Math.min(d, subtotal));
+}
+
+// A coupon used at the counter: must exist, be live and allowed at the counter. Returns the ₹ off for this subtotal.
+// ponytail: website orders count towards usage limits; counter uses don't (no phone check at the counter).
+export function counterCoupon(code, coupons, subtotal, today) {
+  const c = coupons.find((x) => !x.deleted && String(x.code).toUpperCase() === String(code || '').trim().toUpperCase());
+  if (c && c.channel === 'online') throw new Error(`${c.code} is for website orders only`);
+  try { return couponDiscount(c, subtotal, { today }); } catch (e) { throw new Error(couponError(e.message) || e.message); }
+}
+
+// Price of one unit for this quantity and buyer: the regular buyer's own rate (or their % off), dropping to the item's
+// bulk (wholesale) price from its minimum quantity, whichever is lower. Same rule as _unit_price in 0006_staff_bulk.sql.
+// buyer: { price_discount, rates: { item_id: price } } or null.
+export function unitPrice(item, qty, buyer) {
+  const own = Number(buyer?.rates?.[item.id]);
+  let p = own > 0 ? own : round2(item.sale_price * (1 - (Number(buyer?.price_discount) || 0) / 100));
+  if (item.wholesale_price > 0 && item.wholesale_min_qty > 0 && qty >= item.wholesale_min_qty) p = Math.min(p, Number(item.wholesale_price));
+  return p;
 }
 
 // Shipping on the amount after discount, the same as place_order.

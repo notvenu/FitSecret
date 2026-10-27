@@ -7,34 +7,48 @@
 export const COMMON = { id: 'uuid', created_at: 'ts', updated_at: 'ts', deleted: 'bool' };
 
 export const TABLES = {
-  branches: { code: 'text', name: 'text', address: 'text', phone: 'text', gstin: 'text', state_code: 'text', is_online: 'bool', settings: 'json' },
+  // A company (legal entity: own name, GSTIN, books) owns branches and warehouses. Branches with no company_id predate companies.
+  companies: { name: 'text', legal_name: 'text', gstin: 'text', state_code: 'text', address: 'text', phone: 'text', email: 'text', logo: 'text', note: 'text' },
+  branches: { code: 'text', name: 'text', address: 'text', phone: 'text', gstin: 'text', state_code: 'text', is_online: 'bool', settings: 'json',
+    kind: 'text', company_id: 'uuid' }, // kind: store (default) | warehouse
   categories: { name: 'text', slug: 'text', sort: 'int', image: 'text', parent_id: 'uuid' },
   items: {
     name: 'text', slug: 'text', group_key: 'text', sku: 'text', barcode: 'text', brand: 'text', category_id: 'uuid',
     flavour: 'text', size: 'text', unit: 'text', hsn: 'text', gst_rate: 'num', mrp: 'num', sale_price: 'num',
     purchase_price: 'num', low_stock: 'num', online: 'bool', featured: 'bool', goals: 'json', description: 'text', image: 'text',
     wholesale_price: 'num', wholesale_min_qty: 'num', location: 'text', model: 'text',
+    refill_days: 'int', // days one unit lasts a customer (2 kg whey ≈ 45): Parties → Follow-ups lists who is due to buy again
+    company_ids: 'json', // companies that sell it; empty / null = every company
   },
   parties: { type: 'text', name: 'text', phone: 'text', email: 'text', gstin: 'text', address: 'text', state_code: 'text', opening_balance: 'num', credit_limit: 'num',
-    shipping_address: 'text', group_name: 'text', payment_terms: 'int', extra: 'json' },
+    shipping_address: 'text', group_name: 'text', payment_terms: 'int', extra: 'json',
+    // Regular buyers: % off every item, and/or fixed per-item prices { item_id: price }. Used at the counter and, when they sign in, on the website.
+    price_discount: 'num', rates: 'json' },
   invoices: {
     branch_id: 'uuid', type: 'text', no: 'text', date: 'date', party_id: 'uuid', party_name: 'text', party_phone: 'text',
     party_gstin: 'text', party_state: 'text', tax_inclusive: 'bool', subtotal: 'num', discount: 'num', taxable: 'num',
     cgst: 'num', sgst: 'num', igst: 'num', round_off: 'num', total: 'num', paid: 'num', status: 'text', notes: 'text',
     order_id: 'uuid', created_by: 'text',
     due_date: 'date', ship_to: 'text', party_extra: 'json', tcs: 'num', currency: 'text', fx_rate: 'num',
+    // ref_*: the original invoice a credit / debit note is against (printed on the note, as GST rule 53 requires).
+    ref_id: 'uuid', ref_no: 'text', ref_date: 'date', bill_discount: 'num', referrer: 'text', salesperson: 'text',
   },
   invoice_lines: {
     invoice_id: 'uuid', item_id: 'uuid', name: 'text', hsn: 'text', batch_no: 'text', expiry: 'date', qty: 'num', rate: 'num',
     mrp: 'num', discount_pct: 'num', gst_rate: 'num', taxable: 'num', tax: 'num', total: 'num', cost: 'num', sort: 'int', serial: 'text', mfg: 'date',
+    note: 'text', // printed under the line: near-expiry offer disclosure, combo name
   },
   stock_movements: { branch_id: 'uuid', item_id: 'uuid', qty: 'num', batch_no: 'text', expiry: 'date', ref_type: 'text', ref_id: 'uuid', note: 'text', mfg: 'date' },
-  payments: { branch_id: 'uuid', party_id: 'uuid', invoice_id: 'uuid', direction: 'text', amount: 'num', mode: 'text', date: 'date', note: 'text', tds: 'num' },
-  expenses: { branch_id: 'uuid', category: 'text', amount: 'num', mode: 'text', date: 'date', note: 'text' },
+  // mode 'exchange': credit from a sale return spent on a new sale (note = the credit note no). reconciled: bank statement date.
+  payments: { branch_id: 'uuid', party_id: 'uuid', invoice_id: 'uuid', direction: 'text', amount: 'num', mode: 'text', date: 'date', note: 'text', tds: 'num', reconciled: 'date',
+    ref: 'text', ref_date: 'date', status: 'text', deposit_to: 'text' }, // cheques: number, date on it, where it is (shared/cheques.js)
+  expenses: { branch_id: 'uuid', category: 'text', amount: 'num', mode: 'text', date: 'date', note: 'text', employee_id: 'uuid' }, // employee_id: salary / advance paid to staff
   orders: {
     order_no: 'text', user_id: 'uuid', branch_id: 'uuid', name: 'text', phone: 'text', email: 'text', address: 'json',
     subtotal: 'num', shipping: 'num', discount: 'num', total: 'num', payment_method: 'text', payment_status: 'text',
     payment_ref: 'text', status: 'text', courier: 'text', awb: 'text', tracking_url: 'text', notes: 'text', invoice_id: 'uuid', coupon: 'text', internal_note: 'text',
+    combo_discount: 'num', // part of `discount` that came from combos (the rest is the coupon)
+    points: 'num', points_party: 'uuid', // loyalty points (₹) the signed-in customer spent on this order, and whose
   },
   order_lines: { order_id: 'uuid', item_id: 'uuid', name: 'text', variant: 'text', qty: 'num', price: 'num', total: 'num' },
   order_events: { order_id: 'uuid', status: 'text', note: 'text' },
@@ -44,14 +58,45 @@ export const TABLES = {
   journals: { branch_id: 'uuid', no: 'text', date: 'date', note: 'text', lines: 'json' },
   // Website offers (Online Store → Offers). place_order applies them server-side; rules mirrored in store.js couponDiscount.
   coupons: { code: 'text', kind: 'text', value: 'num', min_order: 'num', max_discount: 'num', starts: 'date', ends: 'date',
-    usage_limit: 'int', per_phone: 'int', active: 'bool', public: 'bool', note: 'text' },
+    usage_limit: 'int', per_phone: 'int', active: 'bool', public: 'bool', note: 'text',
+    channel: 'text' }, // where it can be used: both (default) | counter | online
   // Website inbox (Online Store → Inbox): product reviews, contact messages, back-in-stock requests. Customers write via submit_feedback.
   // status: new | approved | hidden (reviews) · new | done (messages) · new | notified (restock)
   feedback: { kind: 'text', item_id: 'uuid', order_no: 'text', name: 'text', phone: 'text', email: 'text', rating: 'int', title: 'text', body: 'text',
     status: 'text', reply: 'text', verified: 'bool' },
+  // Staff (Staff → Staff list). pay_type: monthly (salary for the month) | daily (wage per day worked). Not the login users / PINs.
+  employees: { branch_id: 'uuid', name: 'text', phone: 'text', role: 'text', pay_type: 'text', salary: 'num', joined: 'date', active: 'bool', note: 'text' },
+  // One row per employee per day. status: present | half | leave (paid) | off (weekly off) | absent
+  attendance: { branch_id: 'uuid', employee_id: 'uuid', date: 'date', status: 'text', in_time: 'text', out_time: 'text', note: 'text' },
+  // Day close (Z report): what the books expected per payment mode vs what was counted. The cash difference is posted as an adjustment.
+  day_closes: { branch_id: 'uuid', date: 'date', expected: 'json', counted: 'json', diff: 'num', closed_by: 'text', note: 'text' },
+  // Audit trail: invoice edits and cancellations, who did it and what the bill looked like before.
+  audit_log: { branch_id: 'uuid', ref_type: 'text', ref_id: 'uuid', ref_no: 'text', action: 'text', by: 'text', data: 'json' },
+  // Lab reports / COA / FSSAI / import papers for a variant, optionally one batch. url: a web link or an uploaded PDF / photo.
+  certificates: { item_id: 'uuid', batch_no: 'text', kind: 'text', title: 'text', url: 'text', valid_until: 'date', note: 'text' },
+  // kind 'combo': items [{ item_id, qty }] for `price`. kind 'expiry': discount_pct off one batch (item_id, batch_no, expiry) until it expires.
+  // Approved by a person (approved_by); active = false means switched off or dismissed. Rules: shared/offers.js.
+  offers: { kind: 'text', name: 'text', item_id: 'uuid', batch_no: 'text', expiry: 'date', discount_pct: 'num', items: 'json', price: 'num',
+    starts: 'date', ends: 'date', active: 'bool', approved_by: 'text', note: 'text',
+    channel: 'text' }, // combos: both (default) | counter | online. Near-expiry offers are counter-only (they belong to a batch).
 };
 
 export const columnsOf = (t) => ({ ...COMMON, ...TABLES[t] });
+
+export const ATTENDANCE = { present: 'Present', half: 'Half day', leave: 'Paid leave', off: 'Weekly off', absent: 'Absent' };
+// Staff rows are checked the same way by both back ends before saving. Throws an Error meant for the user.
+export function checkStaffRow(t, b) {
+  if (b.deleted) return;
+  if (t === 'employees') {
+    if (b.pay_type && !['monthly', 'daily'].includes(b.pay_type)) throw new Error('Pay type is monthly or daily');
+    if (b.salary != null && b.salary !== '' && !(Number(b.salary) >= 0)) throw new Error('Enter the salary as a number');
+  }
+  if (t === 'attendance') {
+    if (!b.employee_id) throw new Error('Pick the staff member');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(b.date || '')) throw new Error('Pick a date');
+    if (!ATTENDANCE[b.status]) throw new Error('Pick present, half day, leave, off or absent');
+  }
+}
 
 // Wire (JSON/Postgres) -> SQLite row
 export function toLocal(table, row) {
@@ -99,10 +144,13 @@ export function calcLine({ qty, rate, discount_pct = 0, gst_rate = 0 }, inclusiv
   return { taxable: gross, tax, total: round2(gross + tax) };
 }
 
-export function calcInvoice(lines, { inclusive = true, interState = false } = {}) {
+// billDiscount: ₹ off the whole bill, spread over the lines in proportion so each line's taxable value (and GST) drops with it.
+export function calcInvoice(lines, { inclusive = true, interState = false, billDiscount = 0 } = {}) {
   let subtotal = 0, taxable = 0, tax = 0, gross = 0;
+  const pre = lines.reduce((s, l) => s + l.qty * l.rate * (1 - (l.discount_pct || 0) / 100), 0);
+  const bill = round2(Math.min(Math.max(Number(billDiscount) || 0, 0), pre)), f = pre ? 1 - bill / pre : 1;
   const out = lines.map((l) => {
-    const c = calcLine(l, inclusive);
+    const c = calcLine({ ...l, discount_pct: 100 - (100 - (l.discount_pct || 0)) * f }, inclusive);
     subtotal += l.qty * l.rate;
     taxable += c.taxable; tax += c.tax; gross += c.total;
     return { ...l, ...c };
@@ -113,7 +161,7 @@ export function calcInvoice(lines, { inclusive = true, interState = false } = {}
   const total = Math.round(gross);
   subtotal = round2(subtotal);
   return {
-    lines: out, subtotal, taxable, cgst, sgst, igst,
+    lines: out, subtotal, taxable, cgst, sgst, igst, bill_discount: bill,
     discount: round2(subtotal - (inclusive ? gross : taxable)),
     round_off: round2(total - taxable - cgst - sgst - igst), total,
   };
@@ -147,6 +195,51 @@ export function invoiceExtras(body, party, { date, total }) {
     ship_to: body.ship_to ?? party?.shipping_address ?? null,
     party_extra: party?.extra && Object.values(party.extra).some(Boolean) ? party.extra : null,
   };
+}
+
+// A credit / debit note against an invoice: same party, only items on that bill, and no more than was sold minus earlier returns.
+// src = the original invoice with .lines; earlier = lines of returns already made against it. Throws Error meant for the user.
+export function checkReturn(type, src, earlier, lines) {
+  if (!src || src.deleted || src.status === 'cancelled') throw new Error('Original invoice not found');
+  if (src.type !== type.replace('_return', '')) throw new Error(`${src.no} is not a ${type.replace('_return', '')} invoice`);
+  const left = new Map();
+  for (const l of src.lines) left.set(l.item_id, (left.get(l.item_id) || 0) + Number(l.qty));
+  for (const l of earlier) left.set(l.item_id, (left.get(l.item_id) || 0) - Number(l.qty));
+  const want = new Map();
+  for (const l of lines) want.set(l.item_id, (want.get(l.item_id) || 0) + Number(l.qty));
+  for (const [id, q] of want) {
+    const can = round2(left.get(id) || 0), name = src.lines.find((l) => l.item_id === id)?.name;
+    if (!name) throw new Error(`That item is not on ${src.no}`);
+    if (q > can + 1e-9) throw new Error(`${name}: only ${can} left to return on ${src.no}`);
+  }
+}
+
+// Settings → Staff permissions. Admins are never limited. allowed = ₹ of discount that comes from approved offers and combos,
+// which don't count against the cashier's limit. Throws Error meant for the user.
+export function checkPerms(user, settings, calc, allowed = 0) {
+  const max = settings?.perms?.max_discount;
+  if (!user || user.role === 'admin' || max == null || max === '' || !(calc.subtotal > 0)) return;
+  if ((Math.max(0, calc.discount - allowed) / calc.subtotal) * 100 > Number(max) + 0.01) throw Object.assign(new Error(`Discount above ${max}% needs the owner’s PIN`), { approval: true });
+}
+
+// Prices typed at the counter. Never above MRP on a sale (Legal Metrology). Lower than the usual price (list, the customer's special
+// rate or % off, the bulk price, or what they were last billed) depends on Settings → Staff: free | approval (owner's PIN) | never.
+// usual(line) → the price that needs no say-so. The owner is never limited; `approved` = an owner's PIN was checked for this bill.
+// Throws Error; err.approval = true means an owner's PIN would allow it. Returns the lowered lines (for the audit trail).
+export const CHANNELS = { both: 'Counter & website', counter: 'Counter only', online: 'Website only' };
+export function checkPrices({ type, user, settings, lines, usual, inclusive = true, approved = false }) {
+  if (type !== 'sale') return [];
+  for (const l of lines) {
+    const incl = inclusive ? l.rate : l.rate * (1 + (Number(l.gst_rate) || 0) / 100);
+    if (l.mrp > 0 && incl > l.mrp + 0.01) throw new Error(`${l.name}: ₹${round2(incl)} is above the MRP of ₹${l.mrp}. Items can't be sold above MRP`);
+  }
+  const low = lines.map((l) => ({ name: l.name, usual: round2(usual(l)), charged: l.rate })).filter((x) => x.usual > 0 && x.charged < x.usual - 0.01);
+  if (!low.length || !user || user.role === 'admin' || approved) return low;
+  const mode = settings?.perms?.price_edit || (settings?.perms?.lock_rate ? 'never' : 'approval');
+  if (mode === 'free') return low;
+  const what = low.map((x) => `${x.name} at ₹${x.charged} (usual ₹${x.usual})`).join(', ');
+  if (mode === 'never') throw new Error(`Only the owner can lower prices: ${what}`);
+  throw Object.assign(new Error(`Lower price needs the owner’s PIN: ${what}`), { approval: true });
 }
 
 export const today = () => new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD local
@@ -189,3 +282,24 @@ export const GOALS = {
 };
 // Sorted [code, name] pairs — object keys like '10' would otherwise iterate before '01'.
 export const STATE_LIST = Object.entries(STATES).sort(([a], [b]) => a.localeCompare(b));
+
+// Why a row can't be deleted, or null. rows(t) = live rows of a table; balanceOf(party_id) = what the party owes (+) / is owed (−).
+// Deletes are soft (Recycle Bin), but a party with money outstanding would silently drop out of dues, and journals / items
+// would point at nothing.
+export function deleteBlocker(t, id, rows, balanceOf) {
+  if (t === 'parties') {
+    const b = round2(balanceOf(id) || 0);
+    if (b) return `This party ${b > 0 ? 'owes you' : 'is owed'} ${inr(Math.abs(b))}. Settle the balance first`;
+  }
+  if (t === 'accounts' && rows('journals').some((j) => (j.lines || []).some((l) => l.account === 'acc:' + id))) return 'Journal entries use this account. Delete those entries first';
+  if (t === 'companies') {
+    const n = rows('branches').filter((b) => b.company_id === id).length;
+    if (n) return `${n} branch${n > 1 ? 'es / warehouses are' : ' / warehouse is'} in this company. Move or delete them first`;
+  }
+  if (t === 'categories') {
+    const n = rows('items').filter((i) => i.category_id === id).length;
+    if (n) return `${n} item${n > 1 ? 's are' : ' is'} in this category. Move them first`;
+    if (rows('categories').some((c) => c.parent_id === id)) return 'It has sub-categories. Move or delete them first';
+  }
+  return null;
+}

@@ -30,6 +30,12 @@ export default function Header({ cats = [] }: { cats?: NavCat[] }) {
   const router = useRouter();
   const path = usePathname();
   useEffect(() => setMenu(false), [path]);
+  const [scrolled, setScrolled] = useState(false);
+  useEffect(() => {
+    const on = () => setScrolled(window.scrollY > 8);
+    on(); window.addEventListener('scroll', on, { passive: true });
+    return () => window.removeEventListener('scroll', on);
+  }, []);
   const NAV: [string, string][] = [...cats.map((c) => [`/shop?category=${c.slug}`, SHORT[c.slug] || c.name] as [string, string]), ['/shop', 'All products']];
   const search = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -39,9 +45,9 @@ export default function Header({ cats = [] }: { cats?: NavCat[] }) {
   return (
     <>
       <div className="bg-ink px-4 py-2 text-center text-xs font-medium text-white">
-        Free shipping on orders above ₹999 <span className="mx-2 text-brand">/</span> Visit us on MG Road, Vijayawada
+        Free shipping on orders above ₹999<span className="hidden sm:inline"> <span className="mx-2 text-brand">/</span> Visit us on MG Road, Vijayawada</span>
       </div>
-      <header className="sticky top-0 z-40 border-b border-line bg-white/90 backdrop-blur-md">
+      <header className={`sticky top-0 z-40 border-b bg-white/85 backdrop-blur-md transition-[box-shadow,border-color] duration-300 ${scrolled ? 'border-transparent shadow-[0_10px_30px_-18px_rgba(30,42,45,0.35)]' : 'border-line'}`}>
         <div className="mx-auto flex h-[68px] max-w-7xl items-center gap-6 px-4 md:px-6">
           <Logo />
           <form onSubmit={search} role="search" className="relative hidden max-w-md flex-1 md:block">
@@ -64,20 +70,21 @@ export default function Header({ cats = [] }: { cats?: NavCat[] }) {
         <nav className="mx-auto hidden h-11 max-w-7xl items-center gap-7 px-6 text-sm font-medium lg:flex">
           {cats.map((c) => (
             <div key={c.slug} className="group relative flex h-full items-center">
-              <Link href={`/shop?category=${c.slug}`} className="text-ink-soft transition-colors hover:text-ink">{SHORT[c.slug] || c.name}</Link>
+              <Link href={`/shop?category=${c.slug}`} className="nav-link text-ink-soft transition-colors hover:text-ink">{SHORT[c.slug] || c.name}</Link>
               {c.subs.length > 0 && (
-                <div className="invisible absolute left-0 top-full z-50 w-64 translate-y-1 rounded-[var(--radius-card)] border border-line bg-white p-2 opacity-0 shadow-[0_20px_50px_-20px_rgba(30,42,45,0.35)] transition-all duration-150 group-focus-within:visible group-focus-within:translate-y-0 group-focus-within:opacity-100 group-hover:visible group-hover:translate-y-0 group-hover:opacity-100">
+                <div className="invisible absolute left-0 top-full z-50 w-64 origin-top-left translate-y-1 scale-[0.97] rounded-[var(--radius-card)] border border-line bg-white p-2 opacity-0 shadow-[0_20px_50px_-20px_rgba(30,42,45,0.35)] transition-[opacity,transform,visibility] duration-200 ease-out-expo group-focus-within:visible group-focus-within:translate-y-0 group-focus-within:scale-100 group-focus-within:opacity-100 group-hover:visible group-hover:translate-y-0 group-hover:scale-100 group-hover:opacity-100">
                   {c.subs.map((x) => <Link key={x.slug} href={`/shop?category=${c.slug}&sub=${x.slug}`} className="block rounded-lg px-3 py-2 text-ink-soft hover:bg-surface hover:text-ink">{x.name}</Link>)}
                   <Link href={`/shop?category=${c.slug}`} className="mt-1 block rounded-lg border-t border-line px-3 pt-2.5 pb-2 font-semibold hover:bg-surface">All {(SHORT[c.slug] || c.name).toLowerCase()}</Link>
                 </div>
               )}
             </div>
           ))}
-          <Link href="/shop" className="text-ink-soft transition-colors hover:text-ink">All products</Link>
+          <Link href="/shop" className="nav-link text-ink-soft transition-colors hover:text-ink">All products</Link>
           <div className="ml-auto flex items-center gap-6">
-            <Link href="/about" className="text-ink-soft hover:text-ink">About us</Link>
-            <Link href="/contact" className="text-ink-soft hover:text-ink">Contact us</Link>
-            <Link href="/track" className="text-ink-soft hover:text-ink">Track order</Link>
+            <Link href="/bulk" className="nav-link text-ink-soft transition-colors hover:text-ink">Bulk orders</Link>
+            <Link href="/about" className="nav-link text-ink-soft transition-colors hover:text-ink">About us</Link>
+            <Link href="/contact" className="nav-link text-ink-soft transition-colors hover:text-ink">Contact us</Link>
+            <Link href="/track" className="nav-link text-ink-soft transition-colors hover:text-ink">Track order</Link>
           </div>
         </nav>
       </header>
@@ -88,8 +95,8 @@ export default function Header({ cats = [] }: { cats?: NavCat[] }) {
             <div className="flex items-center justify-between"><Logo /><button onClick={() => setMenu(false)} aria-label="Close menu" className="p-2"><X size={26} /></button></div>
             <form onSubmit={search} className="mt-6"><input name="q" aria-label="Search products" className="field" placeholder="Search products" /></form>
             <nav className="mt-6">
-              {[...NAV, ['/about', 'About us'], ['/contact', 'Contact us'], ['/track', 'Track order'], ['/account', 'My orders']].map(([href, label], i) => (
-                <motion.div key={href} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.03 * i }} className="border-b border-line">
+              {[...NAV, ['/bulk', 'Bulk orders'], ['/about', 'About us'], ['/contact', 'Contact us'], ['/track', 'Track order'], ['/account', 'My orders']].map(([href, label], i) => (
+                <motion.div key={href} initial={{ opacity: 0, transform: 'translateY(16px)' }} animate={{ opacity: 1, transform: 'translateY(0px)' }} transition={{ delay: 0.035 * i, duration: 0.45, ease: [0.23, 1, 0.32, 1] }} className="border-b border-line">
                   <Link href={href} className="display block py-4 text-4xl">{label}</Link>
                 </motion.div>
               ))}

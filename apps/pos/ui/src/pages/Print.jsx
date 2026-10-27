@@ -21,7 +21,7 @@ export default function Print({ id, fmt = 'thermal', branch }) {
   }); }, [id]);
   useEffect(() => { if (inv) setTimeout(() => window.print(), 150); }, [inv]);
   if (!inv) return null;
-  const thermal = fmt === 'thermal';
+  const thermal = fmt.startsWith('thermal'), narrow = fmt === 'thermal58'; // 58 mm roll: same receipt, narrower
   const theme = thermal ? 'thermal' : cfg.theme || 'classic';
   const grid = theme === 'tally'; // every cell boxed, like Tally's invoice
   const mrpSaved = round2(inv.lines.reduce((s, l) => s + (l.mrp > 0 ? l.mrp * l.qty : l.total), 0) - (inv.total - (inv.tcs || 0)));
@@ -33,18 +33,20 @@ export default function Print({ id, fmt = 'thermal', branch }) {
     r.taxable += l.taxable; r.tax += l.tax; return a;
   }, {}));
   const extras = Object.entries(inv.party_extra || {}).filter(([, v]) => v);
-  const lineNote = (l) => [l.batch_no && `Batch ${l.batch_no}`, l.mfg && `Mfg ${l.mfg}`, l.expiry && `Exp ${l.expiry}`, l.serial && `S/N ${l.serial}`].filter(Boolean).join(' · ');
+  // batch actually sold (FEFO) is printed so every pack can be traced back to its supplier batch
+  const lineNote = (l) => [(l.batch_no || l.sold_batches) && `Batch ${l.batch_no || l.sold_batches}`, l.mfg && `Mfg ${l.mfg}`, (l.expiry || l.sold_expiry) && `Exp ${l.expiry || l.sold_expiry}`,
+    l.serial && `S/N ${l.serial}`].filter(Boolean).join(' · ');
   const cell = grid ? 'border border-black px-1.5 py-1' : 'px-1 py-0.5';
 
   return (
-    <div className={thermal ? 'mx-auto min-h-screen w-[72mm] bg-white p-1 font-mono text-[11px] leading-snug text-black' : 'mx-auto min-h-screen max-w-[190mm] bg-white p-6 text-[12px] text-black'}
+    <div className={thermal ? `mx-auto min-h-screen ${narrow ? 'w-[48mm] text-[10px]' : 'w-[72mm] text-[11px]'} bg-white p-1 font-mono leading-snug text-black` :'mx-auto min-h-screen max-w-[190mm] bg-white p-6 text-[12px] text-black'}
       style={{ printColorAdjust: 'exact', WebkitPrintColorAdjust: 'exact' }}>
-      <style>{thermal ? '@page { size: 80mm auto; margin: 3mm; }' : '@page { size: A4; margin: 10mm; }'}</style>
+      <style>{thermal ? `@page { size: ${narrow ? 58 : 80}mm auto; margin: ${narrow ? 2 : 3}mm; }` : '@page { size: A4; margin: 10mm; }'}</style>
       {theme === 'modern' ? (
         <div className="mb-3 flex items-end justify-between rounded-[10px] bg-ink px-5 py-4 text-white">
           <div>
             <div className="display text-3xl">{branch?.name}</div>
-            <div className="text-white/75">{branch?.address}</div>
+            <div className="text-white/75">{[branch?.outlet, branch?.address].filter(Boolean).join(' · ')}</div>
             <div className="text-white/75">{branch?.phone && `Ph: ${branch.phone}`} {branch?.gstin && `· GSTIN: ${branch.gstin}`}</div>
           </div>
           <div className="rounded-full bg-brand px-3 py-1 text-xs font-bold text-ink">{TITLE[inv.type]}</div>
@@ -52,7 +54,7 @@ export default function Print({ id, fmt = 'thermal', branch }) {
       ) : (
         <div className={cx('text-center', grid && 'border border-black p-2')}>
           <div className={thermal ? 'text-sm font-bold' : 'text-2xl font-bold'}>{branch?.name}</div>
-          <div>{branch?.address}</div>
+          <div>{[branch?.outlet, branch?.address].filter(Boolean).join(' · ')}</div>
           <div>{branch?.phone && `Ph: ${branch.phone}`} {branch?.gstin && `· GSTIN: ${branch.gstin}`}</div>
           <div className="mt-1 font-bold">{TITLE[inv.type]}</div>
         </div>
@@ -61,6 +63,7 @@ export default function Print({ id, fmt = 'thermal', branch }) {
         <div>
           <div>No: <b>{inv.no}</b></div>
           <div>Date: {inv.date}</div>
+          {inv.ref_no && <div>Against invoice <b>{inv.ref_no}</b> dated {inv.ref_date}</div>}
           {inv.due_date && money && due > 0 && <div>Due: <b>{inv.due_date}</b></div>}
         </div>
         <div className="text-right">
@@ -80,6 +83,7 @@ export default function Print({ id, fmt = 'thermal', branch }) {
             <div key={l.id} className="border-b border-dotted border-black/40 py-0.5">
               <div>{l.name}</div>
               {lineNote(l) && <div className="text-[10px]">{lineNote(l)}</div>}
+              {l.note && <div className="text-[10px] font-bold">{l.note}</div>}
               <div className="flex justify-between"><span>{l.qty} × {l.rate.toFixed(2)}{l.discount_pct ? ` −${l.discount_pct}%` : ''} · GST {l.gst_rate}%</span><span>{l.total.toFixed(2)}</span></div>
             </div>
           ))}
@@ -95,7 +99,7 @@ export default function Print({ id, fmt = 'thermal', branch }) {
             {inv.lines.map((l, i) => (
               <tr key={l.id} className={cx('align-top', theme === 'modern' && 'border-b border-black/10')}>
                 <td className={cell}>{i + 1}</td>
-                <td className={cell}>{l.name}{lineNote(l) && <div className="text-[10px] text-black/60">{lineNote(l)}</div>}</td><td className={cell}>{l.hsn}</td>
+                <td className={cell}>{l.name}{lineNote(l) && <div className="text-[10px] text-black/60">{lineNote(l)}</div>}{l.note && <div className="text-[10px] font-semibold">{l.note}</div>}</td><td className={cell}>{l.hsn}</td>
                 <td className={cx(cell, 'text-right')}>{l.qty}</td><td className={cx(cell, 'text-right')}>{l.rate.toFixed(2)}</td><td className={cx(cell, 'text-right')}>{l.discount_pct ? l.discount_pct + '%' : ''}</td>
                 <td className={cx(cell, 'text-right')}>{l.gst_rate}%</td><td className={cx(cell, 'text-right')}>{l.total.toFixed(2)}</td>
               </tr>
@@ -105,6 +109,7 @@ export default function Print({ id, fmt = 'thermal', branch }) {
       )}
       <div className={cx('mt-1 pt-1', grid ? 'ml-auto w-1/2 border border-black px-2' : 'border-t border-dashed border-black')}>
         {cfg.saved && saved >= 1 && inv.type === 'sale' && <Line k="You saved" v={inr(saved)} />}
+        {inv.bill_discount > 0 && <Line k="Discount on bill" v={'−' + inr(inv.bill_discount)} />}
         <Line k="Taxable value" v={inr(inv.taxable)} />
         {inv.igst ? <Line k="IGST" v={inr(inv.igst)} /> : <><Line k="CGST" v={inr(inv.cgst)} /><Line k="SGST" v={inr(inv.sgst)} /></>}
         <Line k="Round off" v={inr(inv.round_off)} />

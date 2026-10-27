@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import { PGlite } from '@electric-sql/pglite';
 import { TABLES, columnsOf } from '@fitsecret/shared';
 import * as D from '../server/db.js';
-import { pushOnce, pullOnce } from '../server/sync.js';
+import { pushOnce, pullOnce, createSync } from '../server/sync.js';
 
 const STAFF = '11111111-1111-4111-a111-111111111111';
 const CUSTOMER = '22222222-2222-4222-a222-222222222222';
@@ -15,7 +15,8 @@ const SUPABASE_STUB = `
   create table auth.users (id uuid primary key);
   create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
   grant usage on schema public, auth to anon, authenticated, service_role;
-  grant execute on function auth.uid() to anon, authenticated, service_role;
+  create function auth.jwt() returns jsonb language sql stable as $$ select coalesce(nullif(current_setting('request.jwt.claims', true), ''), '{}')::jsonb $$;
+  grant execute on function auth.uid(), auth.jwt() to anon, authenticated, service_role;
   alter default privileges in schema public grant all on tables to anon, authenticated, service_role;
   alter default privileges in schema public grant all on sequences to anon, authenticated, service_role;
   alter default privileges in schema public grant execute on functions to anon, authenticated, service_role;`;
@@ -43,7 +44,7 @@ function device(branchId) {
 before(async () => {
   pg = await PGlite.create();
   await pg.exec(SUPABASE_STUB);
-  for (const f of ['0001_init.sql', '0002_gold.sql', '0003_vyapar_rest.sql', '0004_online_store.sql', '0005_online_inbox.sql']) await pg.exec(readFileSync(new URL('../../../supabase/migrations/' + f, import.meta.url), 'utf8'));
+  for (const f of ['0001_init.sql', '0002_gold.sql', '0003_vyapar_rest.sql', '0004_online_store.sql', '0005_online_inbox.sql', '0006_staff_bulk.sql', '0007_counter.sql', '0008_variants_offers.sql', '0009_channels.sql', '0010_offer_where.sql', '0011_locations.sql', '0012_companies.sql', '0013_loyalty_online.sql', '0014_cheques.sql', '0015_orders_console.sql']) await pg.exec(readFileSync(new URL('../../../supabase/migrations/' + f, import.meta.url), 'utf8'));
   await pg.exec(`insert into auth.users values ('${STAFF}'), ('${CUSTOMER}'); insert into staff (user_id, name, role) values ('${STAFF}', 'Sync', 'admin');`);
 });
 
@@ -94,6 +95,18 @@ test('failed push keeps the outbox intact (offline billing is safe)', async () =
   await assert.rejects(pushOnce(A, async () => { throw new Error('fetch failed'); }));
   assert.equal(A.prepare('select count(*) n from outbox').get().n, n);
   await pushOnce(A, staff);
+});
+
+test('a table the cloud rejects stays queued and does not block the others', async () => {
+  D.save(A, 'branches', { id: branch.id, name: 'Vijayawada MG Road' });
+  const p = D.save(A, 'parties', { name: 'Still Syncs', type: 'customer' });
+  const picky = async (name, args) => { if (args.p?.branches) throw new Error('null value in column "kind"'); return staff(name, args); };
+  await assert.rejects(pushOnce(A, picky), /branches: null value/);
+  assert.deepEqual([...new Set(A.prepare('select tbl from outbox').all().map((r) => r.tbl))], ['branches']);
+  await pullOnce(B, staff);
+  assert.equal(D.get(B, 'parties', p.id)?.name, 'Still Syncs');
+  await pushOnce(A, staff); // fixed on the server: the branch goes too
+  assert.equal(A.prepare('select count(*) n from outbox').get().n, 0);
 });
 
 test('non-staff cannot use sync', async () => {
@@ -158,4 +171,14 @@ test('online payment: pending until server confirms; only service role may confi
   const t = await call('anon')('track_order', { p_order_no: p.order_no, p_phone: '9876500000' });
   assert.equal(t.order.payment_status, 'paid');
   assert.equal(t.order.status, 'placed');
+});
+
+test('the sync password is never kept on disk: an older setup that stored one has it taken out at start', () => {
+  const db = device();
+  D.setMeta(db, 'sync_config', JSON.stringify({ url: 'https://x.supabase.co', anonKey: 'k', email: 'counter@shop.in', password: 'hunter2' }));
+  const s = createSync(db, { log: {} });
+  const cfg = JSON.parse(D.getMeta(db, 'sync_config'));
+  assert.equal(cfg.password, undefined);
+  assert.deepEqual([cfg.url, cfg.email, s.status().configured], ['https://x.supabase.co', 'counter@shop.in', true]);
+  s.stop();
 });

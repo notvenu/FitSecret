@@ -1,65 +1,99 @@
+'use client';
 import Link from 'next/link';
-import { ArrowRight } from '@phosphor-icons/react/dist/ssr';
+import { useRef } from 'react';
+import { ArrowDown, MapPin } from '@phosphor-icons/react';
+import { motion, useScroll, useTransform } from 'motion/react';
 
-// Centred tagline over a full-bleed wall of official brand logos (each in its own tile), scrolling in alternating directions.
-// Top and bottom rows run edge to edge in reserved space; the middle rows are masked out behind the copy, so logos
-// never pass under the text at any width (on phones the middle rows disappear entirely).
-const ROWS = [
-  { dur: 70, reverse: false, cut: false },
-  { dur: 55, reverse: true, cut: true },
-  { dur: 64, reverse: false, cut: true },
-  { dur: 50, reverse: true, cut: true },
-  { dur: 74, reverse: false, cut: false },
-];
-// clear zone tracks the headline width (its font is clamp(..., 7.5vw, 7.25rem), so half-width ~ 26vw, capped), feathered over 70px
-const HALF = 'min(calc(26vw + 48px), 450px)';
-const CUT = `linear-gradient(90deg,#000 0,#000 calc(50% - ${HALF} - 70px),transparent calc(50% - ${HALF}),transparent calc(50% + ${HALF}),#000 calc(50% + ${HALF} + 70px),#000 100%)`;
-const EDGE = 'linear-gradient(90deg,transparent,#000 6%,#000 94%,transparent)';
+// The shop front (you came in through its doors, see ShopEntry): lit signboard, striped awning and a wide display window
+// with real packs from the shelves. Scrolling walks you closer. Below it, the store directory and the brands we stock.
+type Aisle = { slug: string; name: string; count: number; href: string };
+export type WindowPack = { src: string; name: string; href: string };
+const EDGE = 'linear-gradient(90deg,transparent,#000 8%,#000 92%,transparent)';
 
-function LogoRow({ logos, dur, reverse, cut }: { logos: { name: string; src: string }[]; dur: number; reverse: boolean; cut: boolean }) {
+export default function Hero({ logos, total, aisles, packs }: { logos: { name: string; src: string }[]; total: number; aisles: Aisle[]; packs: WindowPack[] }) {
+  const ref = useRef<HTMLElement>(null);
+  const { scrollYProgress } = useScroll({ target: ref, offset: ['start start', 'end start'] });
+  const front = useTransform(scrollYProgress, [0, 0.6], ['scale(1)', 'scale(1.06)']);
+  const tiers = [packs.slice(0, 5), packs.slice(5, 11)];
+
   return (
-    <div className={`overflow-hidden ${cut ? 'hidden md:block' : ''}`} style={{ maskImage: cut ? CUT : EDGE, WebkitMaskImage: cut ? CUT : EDGE }}>
-      <div className={`marquee flex w-max items-center ${reverse ? 'reverse' : ''}`} style={{ ['--dur' as string]: `${dur}s` }}>
-        {[0, 1].map((copy) => (
-          <div key={copy} className="flex shrink-0 items-center gap-4 pr-4">
-            {logos.map((l) => (
-              <span key={l.name} className="grid h-[clamp(52px,5vw,74px)] w-[clamp(120px,11vw,180px)] shrink-0 place-items-center px-5">
-                {/* multiply blends away the white box baked into some JPG logos */}
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={l.src} alt="" className="max-h-[62%] w-auto max-w-full object-contain mix-blend-multiply" />
-              </span>
+    <section ref={ref} className="relative isolate overflow-hidden bg-white">
+      <motion.div style={{ transform: front }} className="mx-auto max-w-7xl origin-[50%_30%] px-4 pt-8 md:px-6 md:pt-12">
+        {/* signboard */}
+        <div className="hero-in signboard mx-auto flex max-w-4xl flex-col items-center px-6 py-5 text-center md:py-6">
+          <h1 className="display sign-lit text-[clamp(2.4rem,7vw,5.5rem)] leading-none">Fit Secrets<span className="text-brand">.</span></h1>
+          <p className="mt-2 text-[11px] font-semibold uppercase tracking-[0.32em] text-white/70 md:text-xs">Supplements · Dry fruits · Organic · Ayurveda</p>
+        </div>
+        <div aria-hidden className="awning hero-in mx-auto max-w-5xl" style={{ animationDelay: '120ms' }} />
+
+        {/* display window */}
+        <div className="shop-window hero-in relative mx-auto flex min-h-[420px] max-w-5xl flex-col md:min-h-[480px]" style={{ animationDelay: '220ms' }}>
+          <div className="relative z-30 flex flex-wrap items-end justify-between gap-5 p-5 md:p-8">
+            <div>
+              <p className="window-decal display text-[clamp(2rem,5vw,4rem)] leading-[0.95]">Reveal your<br />true strength<span className="text-brand">.</span></p>
+              <p className="mt-3 max-w-sm text-sm font-medium text-ink-soft md:text-base">{total}+ genuine products, sealed and billed. Walk the aisles, buy online or pick up at the counter.</p>
+            </div>
+            <div className="flex flex-wrap gap-2.5">
+              <a href="#aisles" className="btn-ink px-7 py-3.5">Walk the aisles <ArrowDown size={16} weight="bold" /></a>
+              <a href="#visit" className="btn border border-ink/25 bg-white/80 px-6 py-3.5 text-ink hover:border-ink"><MapPin size={16} /> Visit the store</a>
+            </div>
+          </div>
+          <div className="mt-auto">
+            {tiers.map((row, t) => row.length > 0 && (
+              <div key={t} className="window-riser flex items-end justify-center gap-[3%] px-4" style={{ ['--h' as string]: t ? 'clamp(88px,12vw,140px)' : 'clamp(70px,9vw,110px)' }}>
+                {row.map((p, i) => (
+                  <Link key={p.href + i} href={p.href} title={p.name} className="window-pack" style={{ animationDelay: `${450 + (t * 5 + i) * 70}ms` }}>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={p.src} alt={p.name} className="h-full w-auto object-contain" />
+                  </Link>
+                ))}
+              </div>
             ))}
           </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-export default function Hero({ logos, total }: { logos: { name: string; src: string }[]; total: number }) {
-  // spread logos so neighbouring rows don't start with the same brands
-  const rows = ROWS.map((_, r) => logos.filter((_, i) => i % ROWS.length === r));
-
-  return (
-    <section className="relative isolate overflow-hidden bg-surface">
-      <div aria-hidden className="pointer-events-none absolute inset-0 -z-10 flex select-none flex-col justify-between py-6 md:py-8">
-        {ROWS.map((row, r) => <LogoRow key={r} logos={rows[r].length >= 4 ? rows[r] : logos} {...row} />)}
-      </div>
-
-      <div className="mx-auto flex min-h-[calc(100dvh-145px)] max-w-4xl flex-col items-center justify-center px-4 py-[clamp(110px,14vh,150px)] text-center">
-        <h1 className="display hero-in text-[clamp(2.6rem,7.5vw,7.25rem)] leading-[0.95]">
-          <span className="whitespace-nowrap">Reveal your</span><br /><span className="whitespace-nowrap">true <span className="relative inline-block">strength<Pulse className="absolute -bottom-[0.12em] left-0 h-[0.16em] w-full" /></span><span className="text-brand">.</span></span>
-        </h1>
-        <p className="hero-in mx-auto mt-8 max-w-lg text-lg leading-relaxed text-mute" style={{ animationDelay: '120ms' }}>
-          Supplements, dry fruits, millets and organic wellness from our MG Road store. {total}+ products, delivered or ready for pickup.
-        </p>
-        <div className="hero-in mt-9 flex flex-wrap items-center justify-center gap-4" style={{ animationDelay: '220ms' }}>
-          <Link href="/shop?category=nutritional-supplements" className="btn-ink group px-8 py-4 text-base">
-            Shop supplements <ArrowRight size={18} weight="bold" className="transition-transform group-hover:translate-x-1" />
-          </Link>
-          <Link href="/shop" className="btn-line bg-white px-8 py-4 text-base">All products</Link>
+          <span aria-hidden className="window-glare" />
         </div>
-      </div>
+        <div aria-hidden className="shop-step mx-auto max-w-5xl"><span className="doormat">Welcome</span></div>
+
+        {/* store directory board, inside the door */}
+        <nav aria-label="Store aisles" className="hero-in mx-auto mt-14 max-w-5xl md:mt-16" style={{ animationDelay: '600ms' }}>
+          <div className="flex items-end justify-between gap-3">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-mute">Store directory</p>
+            <p className="text-xs text-mute">MG Road, Vijayawada · In store &amp; online</p>
+          </div>
+          <ol className="directory mt-3 grid grid-cols-2 gap-px md:grid-cols-4">
+            {aisles.slice(0, 8).map((a, i) => (
+              <li key={a.slug}>
+                <a href={a.href} className="group flex h-full items-center gap-3 bg-ink px-4 py-4 text-white transition-colors duration-200 hover:bg-brand hover:text-ink md:px-5">
+                  <span className="font-mono text-xs font-semibold text-brand transition-colors group-hover:text-ink">{String(i + 1).padStart(2, '0')}</span>
+                  <span className="min-w-0 flex-1 text-sm font-semibold leading-tight md:text-[15px]">{a.name}</span>
+                  <span className="text-xs tabular-nums text-white/50 transition-colors group-hover:text-ink/60">{a.count}</span>
+                </a>
+              </li>
+            ))}
+          </ol>
+        </nav>
+      </motion.div>
+
+      {logos.length > 0 && (
+        <div aria-hidden className="mt-14 border-y border-line py-6 md:mt-16">
+          <p className="mb-3 text-center text-[11px] font-semibold uppercase tracking-[0.2em] text-mute">On our shelves</p>
+          <div className="overflow-hidden" style={{ maskImage: EDGE, WebkitMaskImage: EDGE }}>
+            <div className="marquee flex w-max items-center" style={{ ['--dur' as string]: `${logos.length * 2.2}s` }}>
+              {[0, 1].map((copy) => (
+                <div key={copy} className="flex shrink-0 items-center gap-3 pr-3">
+                  {logos.map((l) => (
+                    <span key={l.name} className="grid h-14 w-32 shrink-0 place-items-center px-4 md:h-16 md:w-36">
+                      {/* multiply blends away the white box baked into some JPG logos */}
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={l.src} alt="" className="max-h-[60%] w-auto max-w-full object-contain mix-blend-multiply" />
+                    </span>
+                  ))}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }

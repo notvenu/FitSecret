@@ -1,0 +1,11 @@
+export type ComboItem = { item_id: string; qty: number };
+export type Combo = { id: string; name: string; items: ComboItem[]; price: number; ends?: string | null; channel?: 'both' | 'counter' | 'online' };
+export type ComboResult = { total: number; applied: { id: string; name: string; sets: number; saving: number }[]; perItem: Record<string, number> };
+export function comboDiscount(lines: { item_id: string; qty: number; price: number }[], combos?: Combo[]): ComboResult;
+export function expiryNote(o: { discount_pct: number; expiry: string; batch_no?: string | null }): string;
+export const EXPIRY_DEFAULTS: { window: number; min_margin: number; steps: [number, number][] };
+export function expiryOffers(args: { batches: unknown[]; items: Map<string, unknown>; offers?: unknown[]; today: string; cfg?: unknown }): any[];
+export function checkOffer(o: any, item: (id: string) => any, today: string): any;
+export function liveOffers<T extends { kind: string }>(offers: T[], kind: string, today: string, channel?: 'counter' | 'online'): T[];
+export function forChannel(o: { channel?: string | null }, channel?: 'counter' | 'online'): boolean;
+export function offerAllowance(lines: any[], offers: any[], date: string, comboClaim?: number): number;

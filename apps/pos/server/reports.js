@@ -76,9 +76,10 @@ export function dashboard(db, branch) {
 }
 
 export function register(db, branch, { type = 'sale', from, to, q }) {
-  return all(db, `select id, no, date, due_date, type, party_name, party_phone, total, paid, status, order_id is not null online from invoices
-    where branch_id = ? and deleted = 0 and type = ? and date between ? and ? and (? is null or no like ? or party_name like ? or party_phone like ?)
-    order by date desc, created_at desc limit 500`, branch, type, from || '0000', to || '9999', q || null, `%${q}%`, `%${q}%`, `%${q}%`);
+  return all(db, `select id, no, date, due_date, type, branch_id, party_name, party_phone, total, paid, status, order_id is not null online from invoices
+    where (? = 'all' or branch_id = ? or branch_id in (select id from branches where company_id = ?)) -- 'co:<id>' = every branch of that company
+      and deleted = 0 and type = ? and date between ? and ? and (? is null or no like ? or party_name like ? or party_phone like ?)
+    order by date desc, created_at desc limit 500`, branch, branch, String(branch).startsWith('co:') ? branch.slice(3) : null, type, from || '0000', to || '9999', q || null, `%${q}%`, `%${q}%`, `%${q}%`);
 }
 
 export function daybook(db, branch, date = today()) {
@@ -107,7 +108,7 @@ export function gst(db, branch, { from, to }) {
                   round(sum(case i.type when 'sale' then l.tax else -l.tax end), 2) tax
                   from invoice_lines l join invoices i on i.id = l.invoice_id
                   where ${w} and i.type in ('sale', 'sale_return') and l.deleted = 0 group by l.hsn, l.gst_rate order by l.hsn`, ...r),
-    credit_notes: all(db, `select no, date, party_name, taxable, cgst, sgst, igst, total from invoices i where ${w} and type = 'sale_return' order by date`, ...r),
+    credit_notes: all(db, `select no, date, ref_no, party_name, taxable, cgst, sgst, igst, total from invoices i where ${w} and type = 'sale_return' order by date`, ...r),
     totals: all(db, `select type, round(sum(taxable), 2) taxable, round(sum(cgst), 2) cgst, round(sum(sgst), 2) sgst, round(sum(igst), 2) igst
                      from invoices i where ${w} and type in ('sale', 'sale_return', 'purchase', 'purchase_return') group by type`, ...r),
   };

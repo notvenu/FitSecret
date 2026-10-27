@@ -31,7 +31,7 @@ Gold-plan features: party credit limits (warning at billing), party-wise item ra
 minimum quantity, Check profit on the bill, loyalty points (Parties → Loyalty Points; redeemed as payment mode `points`), and Accounting:
 Chart of Accounts, fixed assets, Journal Entries, Account Statements, Balance Sheet and Trial Balance. These need `supabase/migrations/0002_gold.sql`.
 Utilities imports Vyapar's item/party export (save the Excel file as CSV) and prints barcode labels. Reports live in `packages/shared/reports.js`,
-one implementation used by both the POS server and /admin.
+one implementation used by every POS counter.
 Also from Vyapar's settings (Settings → Invoice, print & billing): custom invoice prefixes, UPI QR / bank details / terms on invoices, three A4 layouts,
 stop-sale-on-negative-stock, serial/IMEI and mfg dates, TCS on bills, foreign-currency totals and party custom fields. Parties get payment terms (due
 dates + overdue badges), shipping address and groups; payments take TDS. Utilities adds Verify My Data, branch stock transfer (Items → Stock ±),
@@ -58,6 +58,31 @@ Responses are cached 10 minutes per AWB. Parsers: `packages/shared/couriers.js`.
 is downloaded, then cached). Every scan opens a review screen. Unmatched lines become new items and an unknown GSTIN becomes a new supplier,
 but only after you confirm. Clear, flat photos work best; for PDFs, paste the text or screenshot the page.
 
+**Counter upgrades** (needs `supabase/migrations/0007_counter.sql`): edit a saved bill in place with an audit trail (Reports → Audit Trail),
+returns made against the original bill (capped at what was sold, printed “Against invoice …”), exchange credit spent on a new sale,
+bill-level discount and coupons at the counter, cashier permissions (max discount, lowering prices: free / owner's PIN / never, who may edit), offers per channel (counter, website or both), branches & warehouses (stock per location, multi-item FEFO transfers, one-click restock from the warehouse, bills and sales across branches), optional walk-in name and phone, Sale → Day Close (Z report;
+cash difference posted), Cash & Bank → Reconcile (bank statement CSV), Parties → Follow-ups (refills due, lapsed customers, dues),
+referral commission and staff incentive reports, near-expiry markdown hints, batch numbers on printed bills, 58 mm receipts,
+GSTR-1 JSON (Reports → GST) and e-way bill JSON (invoice → E-way bill) for the government portals (`packages/shared/gstjson.js`),
+a short menu for cashiers and hidden document types (Settings → Counter), Telugu / Hindi menu labels, and a phone layout you can install
+as an app. E-invoicing (IRN) is not built: it needs a GSP account and only applies above ₹5 Cr turnover.
+
+**Insights** (menu → Insights, owner only): findings and recommendations per subject (sales, stock, profit, customers, money, staff,
+online) worked out offline from the shop's data in `packages/shared/insights.js` (served as the `insights` report by both back ends).
+The one or two that matter show on Home, Items, Parties, Reports and other screens; Settings → Insights & AI switches that on and picks subjects.
+**Weekly plan** (Insights → Overview): the findings ranked by urgency and money at stake, each with steps (`weeklyPlan` in
+`packages/shared/insights.js`). Fixed, readable rules on the shop PC: no AI model, no API key, no internet, no cost, and the same figures
+always give the same advice.
+
+**Variants, certificates, offers** (needs `supabase/migrations/0008_variants_offers.sql`): items sharing `group_key` are one product with
+size / flavour variants (one page on the website, named without the variant's size / flavour). New items offer "Add as a variant" when their
+name matches a product; Items → Find variants groups existing ones after you confirm (`packages/shared/variants.js`). Each variant has its own
+batches, expiry and certificates (Items → open an item; a link or an uploaded PDF / photo, stored on the PC and in the public `certificates`
+Supabase Storage bucket when sync is on). Online Store → Offers & combos: combos (priced the same by billing and by `place_order`,
+`packages/shared/offers.js`) and near-expiry offers suggested per batch (never below cost + minimum margin) that go live only when a person
+approves them; the bill prints the expiry date and batch. Expired batches are never sold (billing skips them). Product pages show combos,
+"customers also bought" (`also_bought` RPC over shop bills and website orders) and current certificates.
+
 ## How the two databases work
 
 - Each store PC keeps a **full SQLite copy** (`apps/pos/data/fitsecret.db`). Billing never waits for the internet.
@@ -79,15 +104,15 @@ cp apps/web/.env.example apps/web/.env.local
 npm run web                   # Website → http://localhost:3000 (demo catalogue until Supabase is set)
 ```
 
-**Temporary `/admin` on the website** (`apps/web/admin`): the same billing & inventory screens as the POS, but talking straight to Supabase
-from the browser, no SQLite and no POS server. `npm run web` (or `npm run build -w apps/web`) first builds it into `apps/web/public/admin`.
-Sign in with a Supabase staff account (email + password, a row in `staff`; `role = 'admin'` gets settings, GST and P&L). It uses the same
-`NEXT_PUBLIC_SUPABASE_*` keys as the storefront and works anywhere the site is deployed, including Vercel.
-Differences from the shop POS: needs internet, no PINs / device sync / backups (use Supabase's), and online orders are invoiced when you
-open/advance them in Online Orders rather than automatically. To remove it: delete `apps/web/admin`, the `rewrites` in `apps/web/next.config.ts`,
-the `admin` script (and the `npm run admin &&` prefixes) in `apps/web/package.json`, and the vite devDependencies there.
+**`/admin` on the website = the Online Orders console** (`apps/web/admin`): staff sign in (Supabase email + password) and work on
+website orders (confirm, pack, ship with courier / tracking, deliver, cancel, refunds) and the inbox (reviews, messages, back-in-stock).
+Nothing else: billing, stock, money and settings are only on the POS counters, which bill each order on their next sync.
+It talks to the database only through `staff_orders`, `staff_update_order`, `staff_inbox`, `staff_inbox_update` (`supabase/migrations/0015_orders_console.sql`).
+Add a console login: create the user in Supabase Auth, then `insert into staff (user_id, name, role) values ('<user id>', 'Ravi', 'orders');`.
+Role `orders` can't read or change any table or use sync; `staff` / `admin` (the counters' sync account, the owner) keep full access.
+`npm run web` (or `npm run build -w apps/web`) builds it into `apps/web/public/admin`.
 
-Billing counters on the shop's Wi-Fi open `http://<shop-pc-ip>:4321`. On Windows, `apps/pos/start-pos.bat` starts it with one double-click.
+The POS only answers on its own PC unless Settings → Cloud sync & backup → “Other devices on the shop network” is on (then other PCs on the shop's Wi-Fi open `http://<shop-pc-ip>:4321`; restart the POS after changing it). On Windows, `apps/pos/start-pos.bat` starts it with one double-click.
 
 ## Go-live checklist
 

@@ -3,17 +3,24 @@ import { useMemo, useState } from 'react';
 import { STATES, inr, today } from '@fitsecret/shared';
 import { code128Svg, newBarcode } from '@fitsecret/shared/barcode';
 import { toTallyXml, parseTally } from '@fitsecret/shared/tally';
-import { api, useApi, toast, fail, downloadCsv } from '../api.js';
-import { Btn, Field, Page, Table, Money, Badge, cx } from '../ui.jsx';
+import { api, useApi, toast, fail, downloadCsv, go } from '../api.js';
+import { Btn, Field, Table, Money, Badge, SideNav, SectionPage, cx } from '../ui.jsx';
 
-const TITLES = { 'import-items': 'Import Items', barcode: 'Barcode Generator', bulk: 'Update Items In Bulk', 'import-parties': 'Import Parties', export: 'Export Items', trash: 'Recycle Bin', verify: 'Verify My Data',
+export const TITLES = { 'import-items': 'Import Items', 'scan-items': 'Scan Items In', barcode: 'Barcode Generator', bulk: 'Update Items In Bulk', 'import-parties': 'Import Parties', export: 'Export Items', trash: 'Recycle Bin', verify: 'Verify My Data',
   'import-tally': 'Import From Tally', 'tally-export': 'Export To Tally' };
+
+export const GROUPS = [['Import', ['import-items', 'scan-items', 'import-parties', 'import-tally']], ['Export', ['export', 'tally-export']], ['Tools', ['barcode', 'bulk', 'verify', 'trash']]];
+const DESC = { 'import-items': 'From a CSV / Excel file (Vyapar export works)', 'scan-items': 'Count stock in with a barcode scanner', 'import-parties': 'Customers and suppliers from a file',
+  'import-tally': 'Ledgers and stock items from Tally XML', export: 'All items as a CSV', 'tally-export': 'Vouchers for Tally Prime', barcode: 'Print barcode labels',
+  bulk: 'Change prices, GST, categories for many items', verify: 'Find and fix data problems', trash: 'Bring back deleted things' };
 
 export default function Utilities({ tool, boot }) {
   tool = TITLES[tool] ? tool : 'import-items';
   return (
-    <Page title={TITLES[tool]}>
+    <SectionPage wide={false} title={TITLES[tool]} nav={<SideNav title="Utilities" value={tool} onChange={(k) => go('/utilities/' + k)}
+      groups={GROUPS.map(([label, keys]) => ({ label, items: keys.map((k) => ({ key: k, label: TITLES[k], desc: DESC[k] })) }))} />}>
       {tool === 'import-items' && <Import kind="items" />}
+      {tool === 'scan-items' && <Import kind="items" scan />}
       {tool === 'import-parties' && <Import kind="parties" />}
       {tool === 'bulk' && <Bulk />}
       {tool === 'barcode' && <Barcodes branch={boot.branch} />}
@@ -27,7 +34,7 @@ export default function Utilities({ tool, boot }) {
         <h2 className="mb-2 mt-6 font-semibold">Items (stock items)</h2><Import kind="items" />
       </>}
       {tool === 'tally-export' && <TallyExport branch={boot.branch} />}
-    </Page>
+    </SectionPage>
   );
 }
 
@@ -68,7 +75,7 @@ const COLS = {
 };
 const pick = (row, keys) => { const k = Object.keys(row).find((h) => keys.includes(norm(h))); return k ? row[k] : ''; };
 
-function Import({ kind }) {
+function Import({ kind, scan }) {
   const items = useApi(kind === 'items' ? '/items' : '/parties');
   const cats = useApi(kind === 'items' ? '/t/categories' : null);
   const [rows, setRows] = useState(null);
@@ -93,7 +100,7 @@ function Import({ kind }) {
       : { ...out, gst_rate: out.gst_rate ?? 18, sale_price: out.sale_price ?? out.mrp ?? 0, low_stock: out.low_stock ?? 3, unit: out.unit || 'pcs', online: false, opening_stock: num(v.opening_stock) || 0 };
   }).filter((r) => r.name), [rows, items.data, cats.data]);
 
-  const [mode, setMode] = useState('file');
+  const mode = scan ? 'barcode' : 'file'; // two tools in the side list: Import Items (file) and Scan Items In (barcodes)
   const save = async (list = mapped) => {
     setBusy(true);
     try {
@@ -106,12 +113,9 @@ function Import({ kind }) {
   return (
     <>
       {kind === 'items' && (
-        <div className="mb-4 flex flex-wrap gap-2">
-          {[['barcode', 'Scan barcodes'], ['file', 'CSV / Excel file']].map(([m, l]) => (
-            <button key={m} onClick={() => setMode(m)} className={cx('rounded-full border px-4 py-2 text-sm font-semibold', mode === m ? 'border-ink bg-ink text-white' : 'border-line bg-white hover:border-ink')}>{l}</button>
-          ))}
-          <a href="#/bill/purchase?scan=1" className="rounded-full border border-line bg-white px-4 py-2 text-sm font-semibold hover:border-ink"
-            title="Reads the bill photo into a purchase entry, so stock, GST input credit and the dealer's balance are all recorded">Scan dealer invoice →</a>
+        <div className="mb-4 flex flex-wrap items-center gap-3">
+          <a href="#/bill/purchase?scan=1" className="text-sm font-semibold text-brand-d hover:underline"
+            title="Reads the bill photo into a purchase entry, so stock, GST input credit and the dealer's balance are all recorded">Scan dealer invoice instead →</a>
         </div>
       )}
       {kind === 'items' && mode === 'barcode' ? <BarcodeEntry items={items.data || []} busy={busy} onSave={save} /> : <>

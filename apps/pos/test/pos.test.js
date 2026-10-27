@@ -3,6 +3,8 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { round2 } from '@fitsecret/shared';
+import { PRESETS } from '@fitsecret/shared/permissions';
 process.env.FITSECRET_DATA = join(tmpdir(), 'fitsecret-test-' + process.pid);
 const D = await import('../server/db.js');
 const { createApp } = await import('../server/index.js');
@@ -26,7 +28,8 @@ before(async () => {
   const { users } = await anon('/api/bootstrap');
   await assert.rejects(anon('/api/login', { user_id: users[0].id, pin: '0000' }), /Wrong PIN/);
   admin = api((await anon('/api/login', { user_id: users[0].id, pin: '1234' })).token);
-  const { id } = await admin('/api/users', { name: 'Counter 1', pin: '1111', role: 'cashier' });
+  // the tests' cashier has the Senior cashier set plus offers (approving near-expiry offers); a login with no set is the minimum
+  const { id } = await admin('/api/users', { name: 'Counter 1', pin: '1111', role: 'cashier', perms: { ...PRESETS.senior[2], offers: true } });
   cashier = api((await anon('/api/login', { user_id: id, pin: '1111' })).token);
   items = await admin('/api/items');
   // real catalogue ships without cost prices; give the first few one so P&L has COGS
@@ -140,7 +143,7 @@ test('cash & bank: add, transfer, balances; cashier blocked', async () => {
   assert.equal(await bal('cash'), c0 + 2000);
   assert.equal(await bal('bank'), b0 + 3000);
   await assert.rejects(cashier('/api/cash', { kind: 'add', amount: 1 }), (e) => e.status === 403);
-  await assert.rejects(cashier('/api/reports/x/item_pnl'), /Admin only/);
+  await assert.rejects(cashier('/api/reports/x/item_pnl'), /Not allowed|Admin only/);
 });
 
 test('barcode import: add_stock adds to existing items, opening_stock only to new ones', async () => {
@@ -177,11 +180,11 @@ test('gold: journals must balance, balance sheet balances, loyalty points capped
   const branch = (await admin('/api/bootstrap')).branch;
   await admin('/api/t/branches', { id: branch.id, settings: { loyalty: { enabled: true, earn_per_100: 1, point_value: 1 } } });
   const cust = await cashier('/api/t/parties', { name: 'Loyal Lifter', type: 'customer', state_code: '37' });
-  await cashier('/api/invoices', { party_id: cust.id, lines: [{ item_id: items[1].id, qty: 1, rate: 1000 }], payments: [{ mode: 'cash', amount: 1000 }] });
+  await admin('/api/invoices', { party_id: cust.id, lines: [{ item_id: items[1].id, qty: 1, rate: 1000 }], payments: [{ mode: 'cash', amount: 1000 }] }); // owner may lower a price
   const pts = (await cashier('/api/reports/x/loyalty')).find((x) => x.party_id === cust.id);
   assert.equal(pts.balance, 10);
-  await assert.rejects(cashier('/api/invoices', { party_id: cust.id, lines: [{ item_id: items[1].id, qty: 1, rate: 100 }], payments: [{ mode: 'points', amount: 11 }, { mode: 'cash', amount: 89 }] }), /Only ₹10/);
-  await cashier('/api/invoices', { party_id: cust.id, lines: [{ item_id: items[1].id, qty: 1, rate: 100 }], payments: [{ mode: 'points', amount: 10 }, { mode: 'cash', amount: 90 }] });
+  await assert.rejects(admin('/api/invoices', { party_id: cust.id, lines: [{ item_id: items[1].id, qty: 1, rate: 100 }], payments: [{ mode: 'points', amount: 11 }, { mode: 'cash', amount: 89 }] }), /Only ₹10/);
+  await admin('/api/invoices', { party_id: cust.id, lines: [{ item_id: items[1].id, qty: 1, rate: 100 }], payments: [{ mode: 'points', amount: 10 }, { mode: 'cash', amount: 90 }] });
   assert.equal((await cashier('/api/reports/x/loyalty')).find((x) => x.party_id === cust.id).balance, 0); // 10 redeemed, 0.9 earned on the 90 paid
   assert.ok(!(await admin('/api/reports/x/cash_bank')).some((m) => m.mode === 'points'), 'points are not money');
 });
@@ -268,6 +271,7 @@ test('Vyapar extras: prefix, TCS, due date, ship-to, TDS, serial + mfg, ledger i
   await admin('/api/invoices', { type: 'purchase', party_id: sup.id, lines: [{ item_id: it.id, qty: 5, rate: 100, batch_no: 'M1', expiry: '2027-06-30', mfg: '2026-06-01' }] });
   assert.equal((await admin(`/api/items/${it.id}/batches`)).find((b) => b.batch_no === 'M1').mfg, '2026-06-01');
 
+  await admin('/api/t/items', { id: it.id, mrp: 1200 }); // nothing sells above MRP
   const inv = await admin('/api/invoices', { party_id: p.id, date: '2026-10-01', tcs_rate: 1, lines: [{ item_id: it.id, qty: 1, rate: 1000, serial: 'SN-1' }] });
   assert.deepEqual([inv.tcs, inv.total, inv.due_date, inv.ship_to, inv.lines[0].serial], [10, 1010, '2026-10-31', 'Gym, MG Road', 'SN-1']);
   assert.deepEqual(inv.party_extra, { Trainer: 'Ravi' });
@@ -305,4 +309,453 @@ test('online orders: cancelling a prepaid order asks for a refund; staff notes a
   const f = D.save(db, 'feedback', { kind: 'message', name: 'Asha', phone: '9000000077', body: 'Vegan protein?', status: 'new' });
   await cashier('/api/t/feedback', { id: f.id, status: 'done' });
   assert.equal((await cashier('/api/t/feedback')).find((x) => x.id === f.id).status, 'done');
+});
+
+test('staff and bank accounts on the POS server: attendance per day, payroll, admin only, bank:<id> mode', async () => {
+  const emp = await admin('/api/t/employees', { name: 'Sita', pay_type: 'daily', salary: 800 });
+  await assert.rejects(cashier('/api/t/employees', { name: 'X' }), (e) => e.status === 403);
+  await admin('/api/t/attendance', { employee_id: emp.id, date: '2026-09-10', status: 'present' });
+  await admin('/api/t/attendance', { employee_id: emp.id, date: '2026-09-10', status: 'half' });
+  await admin('/api/t/attendance', { employee_id: emp.id, date: '2026-09-11', status: 'off' });
+  await admin('/api/t/expenses', { category: 'Staff advance', employee_id: emp.id, amount: 300, mode: 'cash', date: '2026-09-12' });
+  const r = (await admin('/api/reports/x/staff_month?month=2026-09')).find((x) => x.name === 'Sita');
+  assert.deepEqual([r.half, r.off, r.payable_days, r.earned, r.advance, r.balance], [1, 1, 1.5, 1200, 300, 900]);
+  await assert.rejects(cashier('/api/reports/x/staff_month?month=2026-09'), /Not allowed|Admin only/);
+
+  const b = (await admin('/api/bootstrap')).branch;
+  await admin('/api/t/branches', { id: b.id, settings: { ...b.settings, banks: [{ id: 'sbi', name: 'SBI Savings', opening: 0 }] } });
+  const sale = await admin('/api/invoices', { lines: [{ item_id: items[3].id, qty: 1 }], payments: [{ mode: 'bank:sbi', amount: 99999 }] });
+  assert.equal(sale.status, 'paid');
+  assert.equal((await admin('/api/reports/x/cash_bank')).find((x) => x.mode === 'bank:sbi').balance, sale.total);
+  await assert.rejects(admin('/api/t/journals', { lines: [{ account: 'mode:bank:nope', debit: 1 }, { account: 'mode:cash', credit: 1 }] }), /Unknown account/);
+});
+
+test('return against a bill: same party, capped at sold qty, credit spent on an exchange sale', async () => {
+  const it = items[4], cust = await cashier('/api/t/parties', { name: 'Exchange Buyer', type: 'customer', phone: '9000011111', state_code: '37' });
+  const sale = await cashier('/api/invoices', { party_id: cust.id, lines: [{ item_id: it.id, qty: 2 }], payments: [{ mode: 'cash', amount: 1e6 }] });
+  await assert.rejects(cashier('/api/invoices', { type: 'sale_return', ref_id: sale.id, lines: [{ item_id: it.id, qty: 3 }] }), /only 2 left to return/);
+  await assert.rejects(cashier('/api/invoices', { type: 'sale_return', ref_id: sale.id, lines: [{ item_id: items[0].id, qty: 1 }] }), /not on/);
+  const before = await stockOf(it.id);
+  const cn = await cashier('/api/invoices', { type: 'sale_return', ref_id: sale.id, party_id: null, lines: [{ item_id: it.id, qty: 1, rate: sale.lines[0].rate }],
+    payments: [{ mode: 'exchange', amount: 1e6 }] });
+  assert.equal(cn.ref_no, sale.no);
+  assert.equal(cn.party_id, cust.id, 'return goes to the original party');
+  assert.equal(await stockOf(it.id), before + 1);
+  await assert.rejects(cashier('/api/invoices', { type: 'sale_return', ref_id: sale.id, lines: [{ item_id: it.id, qty: 2 }] }), /only 1 left/);
+  await assert.rejects(admin(`/api/invoices/${sale.id}/cancel`, {}), /Cancel the return first/);
+  // exchange: credit note pays part of a new sale, never more than its credit
+  await assert.rejects(cashier('/api/invoices', { lines: [{ item_id: items[1].id, qty: 5 }], payments: [{ mode: 'exchange', amount: cn.total + 1 }], exchange_from: cn.id }), /exchange credit left/);
+  await assert.rejects(cashier('/api/invoices', { lines: [{ item_id: items[1].id, qty: 5 }], payments: [{ mode: 'exchange', amount: 10 }] }), /needs the sale return/);
+  const ex = await cashier('/api/invoices', { lines: [{ item_id: items[1].id, qty: 5 }], exchange_from: cn.id, payments: [{ mode: 'exchange', amount: cn.total }, { mode: 'cash', amount: 1e6 }] });
+  assert.equal(ex.status, 'paid');
+  await assert.rejects(admin(`/api/invoices/${cn.id}/cancel`, {}), /already spent/);
+  const cash = await admin('/api/reports/x/cash_bank');
+  assert.ok(!cash.some((r) => r.mode === 'exchange'), 'exchange credit is not money');
+});
+
+test('edit a bill: same number, stock rebuilt, extra money recorded, audit trail kept', async () => {
+  const it = items[1], cust = await cashier('/api/t/parties', { name: 'Edit Buyer', type: 'customer', phone: '9000022222', state_code: '37' });
+  const s0 = await stockOf(it.id);
+  const inv = await cashier('/api/invoices', { party_id: cust.id, lines: [{ item_id: it.id, qty: 3 }], payments: [{ mode: 'cash', amount: 1e6 }] });
+  await assert.rejects(cashier('/api/invoices', { edit_id: inv.id, lines: [{ item_id: it.id, qty: 1 }] }), /not allowed to edit saved bills/);
+  // smaller bill: stock comes back, the cash paid is trimmed to the new total
+  const e1 = await admin('/api/invoices', { edit_id: inv.id, party_id: cust.id, lines: [{ item_id: it.id, qty: 1 }], reason: 'typed 3 instead of 1' });
+  assert.equal(e1.id, inv.id);
+  assert.equal(e1.no, inv.no);
+  assert.equal(await stockOf(it.id), s0 - 1);
+  assert.equal(e1.paid, e1.total);
+  assert.equal(round2(e1.payments.reduce((s, p) => s + p.amount, 0)), e1.total);
+  // bigger bill: unpaid difference stays on the customer's account unless collected now
+  const e2 = await admin('/api/invoices', { edit_id: inv.id, party_id: cust.id, lines: [{ item_id: it.id, qty: 2 }] });
+  assert.equal(e2.status, 'partial');
+  assert.equal((await admin('/api/parties')).find((p) => p.id === cust.id).balance, round2(e2.total - e2.paid));
+  const audit = await admin('/api/reports/x/audit?from=2000-01-01&to=2100-01-01');
+  const mine = audit.filter((a) => a.bill === inv.no);
+  assert.equal(mine.length, 2);
+  assert.ok(mine.some((a) => a.reason === 'typed 3 instead of 1'));
+  await admin(`/api/invoices/${inv.id}/cancel`, { reason: 'customer left' });
+  assert.ok((await admin('/api/reports/x/audit?from=2000-01-01&to=2100-01-01')).some((a) => a.bill === inv.no && a.action === 'cancel' && a.reason === 'customer left'));
+  await assert.rejects(admin('/api/invoices', { edit_id: inv.id, lines: [{ item_id: it.id, qty: 1 }] }), /cancelled bill cannot be edited/);
+});
+
+test('bill discount lowers GST; cashier discount limit', async () => {
+  const it = items[0];
+  const plain = await cashier('/api/invoices', { type: 'estimate', lines: [{ item_id: it.id, qty: 2, rate: 1180, gst_rate: 18 }] });
+  const off = await cashier('/api/invoices', { type: 'estimate', bill_discount: 236, lines: [{ item_id: it.id, qty: 2, rate: 1180, gst_rate: 18 }] });
+  assert.equal(off.total, plain.total - 236);
+  assert.equal(off.taxable, 1800); // (2360 - 236) / 1.18
+  assert.equal(off.bill_discount, 236);
+  const br = (await admin('/api/bootstrap')).branch;
+  await admin('/api/t/branches', { id: br.id, settings: { ...br.settings, perms: { max_discount: 5 } } });
+  await assert.rejects(cashier('/api/invoices', { type: 'estimate', bill_discount: 236, lines: [{ item_id: it.id, qty: 2, rate: 1180 }] }), /above 5% needs the owner/);
+  await admin('/api/invoices', { type: 'estimate', bill_discount: 236, lines: [{ item_id: it.id, qty: 2, rate: 1180 }] }); // owner is never limited
+  await admin('/api/t/branches', { id: br.id, settings: br.settings });
+});
+
+test('day close: shortage posted so books match the drawer; bank reconciliation', async () => {
+  const day = await admin('/api/reports/x/day_close');
+  const cash = day.modes.find((m) => m.mode === 'cash');
+  assert.ok(day.sales.n > 0);
+  await assert.rejects(cashier('/api/dayclose', { counted: { upi: 10 } }), /Count the cash/);
+  const z = await cashier('/api/dayclose', { counted: { cash: cash.closing - 50 }, note: 'short by 50' });
+  assert.equal(z.diff, -50);
+  const after = await admin('/api/reports/x/day_close');
+  assert.equal(after.modes.find((m) => m.mode === 'cash').closing, round2(cash.closing - 50));
+  assert.equal(after.closed.id, z.id);
+  const p = (await admin('/api/t/payments')).find((x) => x.mode === 'upi');
+  await assert.rejects(cashier('/api/payments/reconcile', { ids: [p.id] }), (e) => e.status === 403);
+  const [r] = await admin('/api/payments/reconcile', { ids: [p.id], date: '2026-10-01' });
+  assert.equal(r.reconciled, '2026-10-01');
+});
+
+test('follow-ups: refill due from the item refill days; lapsed customers', async () => {
+  const it = items[2];
+  await admin('/api/t/items', { id: it.id, refill_days: 30 });
+  const cust = await cashier('/api/t/parties', { name: 'Refill Rao', type: 'customer', phone: '9000033333', state_code: '37' });
+  const d = new Date(Date.now() - 27 * 864e5).toLocaleDateString('en-CA');
+  await cashier('/api/invoices', { party_id: cust.id, date: d, lines: [{ item_id: it.id, qty: 1 }], payments: [{ mode: 'cash', amount: 1e6 }] });
+  const r = (await admin('/api/reports/x/refills')).find((x) => x.party_id === cust.id);
+  assert.equal(r.days_left, 3);
+  const old = await cashier('/api/t/parties', { name: 'Gone Gupta', type: 'customer', phone: '9000044444', state_code: '37' });
+  await cashier('/api/invoices', { party_id: old.id, date: new Date(Date.now() - 90 * 864e5).toLocaleDateString('en-CA'), lines: [{ item_id: it.id, qty: 1 }], payments: [{ mode: 'cash', amount: 1e6 }] });
+  const lapsed = await admin('/api/reports/x/lapsed');
+  assert.ok(lapsed.some((x) => x.party_id === old.id) && !lapsed.some((x) => x.party_id === cust.id));
+});
+
+test('GSTR-1 JSON: B2B, B2CS net of credit notes, HSN, documents issued', async () => {
+  const br = (await admin('/api/bootstrap')).branch;
+  await admin('/api/t/branches', { id: br.id, gstin: '37ABCDE1234F1Z5' });
+  const b2b = await cashier('/api/t/parties', { name: 'Gym Co', type: 'customer', gstin: '37AAACG1234A1Z2', state_code: '37' });
+  const m = new Date().toLocaleDateString('en-CA').slice(0, 7);
+  const inv = await cashier('/api/invoices', { party_id: b2b.id, lines: [{ item_id: items[0].id, qty: 1 }], payments: [{ mode: 'cash', amount: 1e6 }] });
+  const j = await admin(`/api/reports/x/gstr1_json?from=${m}-01&to=${m}-31`);
+  assert.equal(j.gstin, '37ABCDE1234F1Z5');
+  assert.equal(j.fp, m.slice(5) + m.slice(0, 4));
+  const b = j.b2b.find((x) => x.ctin === '37AAACG1234A1Z2').inv.find((x) => x.inum === inv.no);
+  assert.equal(b.itms[0].itm_det.txval, inv.taxable);
+  assert.equal(round2(b.itms[0].itm_det.camt + b.itms[0].itm_det.samt), round2(inv.cgst + inv.sgst));
+  assert.ok(j.b2cs.length && j.hsn.hsn_b2c.length && j.hsn.hsn_b2b.length);
+  assert.ok(j.doc_issue.doc_det.find((x) => x.doc_num === 1).docs[0].cancel >= 1, 'cancelled bills counted');
+  await admin('/api/t/branches', { id: br.id, gstin: br.gstin || '' });
+});
+
+test('payments can be corrected or deleted; the bill they paid follows', async () => {
+  const cust = await cashier('/api/t/parties', { name: 'Pay Fix', type: 'customer', phone: '9000055555', state_code: '37' });
+  const inv = await cashier('/api/invoices', { party_id: cust.id, lines: [{ item_id: items[3].id, qty: 1 }], payments: [{ mode: 'cash', amount: 100 }] });
+  const pay = inv.payments[0];
+  await assert.rejects(cashier(`/api/payments/${pay.id}`, { amount: 50 }), (e) => e.status === 403);
+  await admin(`/api/payments/${pay.id}`, { amount: inv.total, mode: 'upi', reason: 'typed wrong' });
+  let now = await admin(`/api/invoices/${inv.id}`);
+  assert.equal(now.status, 'paid');
+  assert.equal(now.payments[0].mode, 'upi');
+  await admin(`/api/payments/${pay.id}`, { deleted: true });
+  now = await admin(`/api/invoices/${inv.id}`);
+  assert.equal(now.paid, 0);
+  assert.equal(now.status, 'unpaid');
+  assert.equal((await admin('/api/parties')).find((p) => p.id === cust.id).balance, inv.total);
+  const audit = await admin('/api/reports/x/audit?from=2000-01-01&to=2100-01-01');
+  assert.ok(audit.some((a) => a.action === 'edit payment' && a.reason === 'typed wrong') && audit.some((a) => a.action === 'delete payment'));
+});
+
+test('undo a wrong stock correction, never a bill movement', async () => {
+  const it = items[4], s0 = await stockOf(it.id);
+  await admin('/api/stock/adjust', { item_id: it.id, qty: 50, note: 'typo' });
+  assert.equal(await stockOf(it.id), s0 + 50);
+  const moves = await admin(`/api/items/${it.id}/movements`);
+  const adj = moves.find((m) => m.ref_type === 'adjust' && m.qty === 50);
+  await assert.rejects(cashier(`/api/stock/movements/${adj.id}/undo`, {}), (e) => e.status === 403);
+  await admin(`/api/stock/movements/${adj.id}/undo`, {});
+  assert.equal(await stockOf(it.id), s0);
+  const sold = moves.find((m) => m.ref_type === 'sale');
+  if (sold) await assert.rejects(admin(`/api/stock/movements/${sold.id}/undo`, {}), /Edit or cancel the bill/);
+});
+
+test('deletes: blocked while money or records depend on the row, otherwise to the recycle bin', async () => {
+  const owes = (await admin('/api/parties')).find((p) => p.balance > 0);
+  await assert.rejects(admin(`/api/t/parties/${owes.id}`, null, 'DELETE'), /owes you/);
+  const clean = await admin('/api/t/parties', { name: 'Delete Me', type: 'customer', state_code: '37' });
+  await admin(`/api/t/parties/${clean.id}`, null, 'DELETE');
+  assert.ok(!(await admin('/api/parties')).some((p) => p.id === clean.id));
+  assert.ok((await admin('/api/trash')).some((r) => r.id === clean.id));
+  const acc = await admin('/api/t/accounts', { name: 'Owner capital', type: 'capital', opening_balance: 0 });
+  await admin('/api/t/journals', { date: '2026-10-01', note: 'capital', lines: [{ account: 'mode:cash', debit: 1000 }, { account: 'acc:' + acc.id, credit: 1000 }] });
+  await assert.rejects(admin(`/api/t/accounts/${acc.id}`, null, 'DELETE'), /Journal entries use/);
+  const cat = items.find((i) => i.category_id).category_id;
+  await assert.rejects(admin(`/api/t/categories/${cat}`, null, 'DELETE'), /in this category/);
+  const emp = await admin('/api/t/employees', { name: 'Temp Helper', pay_type: 'daily', salary: 500 });
+  await admin(`/api/t/employees/${emp.id}`, null, 'DELETE');
+  assert.ok(!(await admin('/api/t/employees')).some((e) => e.id === emp.id));
+  const item = await admin('/api/t/items', { name: 'Wrong Item', sale_price: 10, gst_rate: 18 });
+  await admin(`/api/t/items/${item.id}`, null, 'DELETE');
+  await admin('/api/trash/restore', { table: 'items', id: item.id });
+  assert.ok((await admin('/api/items')).some((i) => i.id === item.id), 'restored from the recycle bin');
+});
+
+test('insights report', async () => {
+  const ins = await admin('/api/reports/x/insights');
+  assert.deepEqual(Object.keys(ins), ['sales', 'stock', 'profit', 'customers', 'money', 'staff', 'online']);
+  assert.ok(ins.sales.kpis.length && ins.stock.insights.every((x) => x.title && x.level));
+});
+
+test('expired batches are never sold; near-expiry offers stay above cost and need no discount permission once approved', async () => {
+  const it = await admin('/api/t/items', { name: 'Offer Whey 1kg', sale_price: 2360, mrp: 2500, purchase_price: 1500, gst_rate: 18 });
+  const old = new Date(Date.now() - 5 * 864e5).toLocaleDateString('en-CA'), soon = new Date(Date.now() + 20 * 864e5).toLocaleDateString('en-CA');
+  await admin('/api/stock/adjust', { item_id: it.id, qty: 2, batch_no: 'OLD', expiry: old });
+  await admin('/api/stock/adjust', { item_id: it.id, qty: 3, batch_no: 'SOON', expiry: soon });
+  const row = (await admin('/api/items')).find((x) => x.id === it.id);
+  assert.equal(row.expired_qty, 2);
+  assert.equal(row.next_expiry, soon, 'next sellable batch skips the expired one');
+  // below cost (1500 + 18% = 1770 → at most 25% off 2360) is refused
+  await assert.rejects(cashier('/api/t/offers', { kind: 'expiry', item_id: it.id, batch_no: 'SOON', expiry: soon, discount_pct: 30 }), /below cost/);
+  await assert.rejects(cashier('/api/t/offers', { kind: 'expiry', item_id: it.id, batch_no: 'OLD', expiry: old, discount_pct: 10 }), /expired/);
+  const offer = await cashier('/api/t/offers', { kind: 'expiry', item_id: it.id, batch_no: 'SOON', expiry: soon, discount_pct: 20, approved_by: 'Counter 1' });
+  const br = (await admin('/api/bootstrap')).branch;
+  await admin('/api/t/branches', { id: br.id, settings: { ...br.settings, perms: { max_discount: 5 } } });
+  await assert.rejects(cashier('/api/invoices', { lines: [{ item_id: it.id, qty: 1, discount_pct: 20 }], payments: [{ mode: 'cash', amount: 1e6 }] }), /above 5%/);
+  const sale = await cashier('/api/invoices', { lines: [{ item_id: it.id, qty: 1, discount_pct: 20, offer_id: offer.id, note: 'Near-expiry offer 20% off' }], payments: [{ mode: 'cash', amount: 1e6 }] });
+  assert.equal(sale.lines[0].note, 'Near-expiry offer 20% off');
+  assert.equal(sale.lines[0].sold_batches, 'SOON', 'the expired batch was skipped');
+  await admin('/api/t/offers', { id: offer.id, active: false });
+  await assert.rejects(cashier('/api/invoices', { lines: [{ item_id: it.id, qty: 1, discount_pct: 20, offer_id: offer.id }], payments: [{ mode: 'cash', amount: 1e6 }] }), /offer on .* has ended/);
+  await admin('/api/t/branches', { id: br.id, settings: br.settings });
+});
+
+test('combos: never below cost, only the real saving can be claimed on a bill; certificates need a link or file', async () => {
+  const a = await admin('/api/t/items', { name: 'Combo Whey', sale_price: 2000, purchase_price: 1200, gst_rate: 18 });
+  const b = await admin('/api/t/items', { name: 'Combo Shaker', sale_price: 400, purchase_price: 150, gst_rate: 18 });
+  await assert.rejects(admin('/api/t/offers', { kind: 'combo', name: 'Starter', items: [{ item_id: a.id, qty: 1 }], price: 1500 }), /two different items/);
+  await assert.rejects(admin('/api/t/offers', { kind: 'combo', name: 'Starter', items: [{ item_id: a.id, qty: 1 }, { item_id: b.id, qty: 1 }], price: 1500 }), /below what these items cost/);
+  await admin('/api/t/offers', { kind: 'combo', name: 'Starter', items: [{ item_id: a.id, qty: 1 }, { item_id: b.id, qty: 1 }], price: 2100 });
+  const lines = [{ item_id: a.id, qty: 1 }, { item_id: b.id, qty: 1 }];
+  await assert.rejects(cashier('/api/invoices', { lines, combo_discount: 500, payments: [{ mode: 'cash', amount: 1e6 }] }), /combo discount/);
+  const ok = await cashier('/api/invoices', { lines, combo_discount: 300, bill_discount: 300, payments: [{ mode: 'cash', amount: 1e6 }] });
+  assert.equal(ok.total, 2100);
+  await assert.rejects(admin('/api/t/certificates', { item_id: a.id, title: 'Lab report', url: 'not a link' }), /link/);
+  await assert.rejects(cashier('/api/t/certificates', { item_id: a.id, title: 'Lab report', url: 'https://x.test/r.pdf' }), /Add & edit items/);
+  const cert = await admin('/api/t/certificates', { item_id: a.id, batch_no: 'B1', kind: 'lab', title: 'Lab report', url: 'https://example.com/lab.pdf' });
+  assert.equal(cert.batch_no, 'B1');
+  await assert.rejects(cashier(`/api/t/certificates/${cert.id}`, null, 'DELETE'), (e) => e.status === 403);
+});
+
+test('prices at the counter: never above MRP; a cashier lowering one needs the owner PIN (checked, rate-limited, logged)', async () => {
+  const it = await admin('/api/t/items', { name: 'Price Whey', sale_price: 2000, mrp: 2500, purchase_price: 1200, gst_rate: 18 });
+  await admin('/api/stock/adjust', { item_id: it.id, qty: 20 });
+  await assert.rejects(admin('/api/invoices', { lines: [{ item_id: it.id, qty: 1, rate: 2600 }], payments: [{ mode: 'cash', amount: 1e6 }] }), /above the MRP/);
+  await cashier('/api/invoices', { lines: [{ item_id: it.id, qty: 1, rate: 2400 }], payments: [{ mode: 'cash', amount: 1e6 }] }); // raising up to MRP is fine
+  const low = { lines: [{ item_id: it.id, qty: 1, rate: 1800 }], payments: [{ mode: 'cash', amount: 1e6 }], party_name: ' Walk-in Arjun ', party_phone: '+91 98765 11111' };
+  await assert.rejects(cashier('/api/invoices', low), /^Error: APPROVAL: Lower price needs the owner’s PIN: Price Whey at ₹1800 \(usual ₹2000\)/);
+  const { users } = await api()('/api/bootstrap');
+  const owner = users.find((u) => u.role === 'admin');
+  await assert.rejects(cashier('/api/invoices', { ...low, approval: { user_id: owner.id, pin: '9999' } }), /Wrong owner PIN/);
+  const ok = await cashier('/api/invoices', { ...low, approval: { user_id: owner.id, pin: '1234' } });
+  assert.equal(ok.lines[0].rate, 1800);
+  assert.deepEqual([ok.party_name, ok.party_phone, ok.party_id], ['Walk-in Arjun', '9876511111', null], 'walk-in details kept on the bill only');
+  const log = (await admin('/api/reports/x/audit?from=2000-01-01&to=2100-01-01')).find((a) => a.bill === ok.no && a.action === 'price lowered');
+  assert.equal(log.reason, `approved by ${owner.name}`);
+  const br = (await admin('/api/bootstrap')).branch;
+  await admin('/api/t/branches', { id: br.id, settings: { ...br.settings, perms: { price_edit: 'never' } } });
+  await assert.rejects(cashier('/api/invoices', low), /Only the owner can lower prices/);
+  await admin('/api/t/branches', { id: br.id, settings: { ...br.settings, perms: { price_edit: 'free', max_discount: 5 } } });
+  await cashier('/api/invoices', low); // free mode: saved, still logged
+  await assert.rejects(cashier('/api/invoices', { lines: [{ item_id: it.id, qty: 1, discount_pct: 20 }], payments: [{ mode: 'cash', amount: 1e6 }] }), /^Error: APPROVAL: Discount above 5%/);
+  await cashier('/api/invoices', { lines: [{ item_id: it.id, qty: 1, discount_pct: 20 }], payments: [{ mode: 'cash', amount: 1e6 }], approval: { user_id: owner.id, pin: '1234' } });
+  // counter coupons: checked on the server, website-only ones refused, and they don't count against the 5% limit
+  await admin('/api/t/coupons', { code: 'SHOP15', kind: 'percent', value: 15, active: true, channel: 'counter' });
+  await admin('/api/t/coupons', { code: 'WEBONLY', kind: 'percent', value: 10, active: true, channel: 'online' });
+  await assert.rejects(cashier('/api/invoices', { coupon: 'WEBONLY', bill_discount: 200, lines: [{ item_id: it.id, qty: 1 }], payments: [{ mode: 'cash', amount: 1e6 }] }), /website orders only/);
+  const c = await cashier('/api/invoices', { coupon: 'SHOP15', bill_discount: 300, lines: [{ item_id: it.id, qty: 1 }], payments: [{ mode: 'cash', amount: 1e6 }] });
+  assert.equal(c.total, 1700);
+  await admin('/api/t/branches', { id: br.id, settings: br.settings });
+});
+
+test('branches & warehouses: transfer with FEFO batches, never more than the source has; restock and cross-branch reports', async () => {
+  const br = (await admin('/api/bootstrap')).branch;
+  const wh = await admin('/api/t/branches', { name: 'Gollapudi Warehouse', code: 'WH1', kind: 'warehouse', state_code: '37' });
+  const it = await admin('/api/t/items', { name: 'Loc Whey', sale_price: 2000, purchase_price: 1200, gst_rate: 18, low_stock: 5 });
+  await admin('/api/stock/adjust', { item_id: it.id, qty: 6, batch_no: 'LATE', expiry: '2099-12-31' });
+  await admin('/api/stock/adjust', { item_id: it.id, qty: 4, batch_no: 'SOON', expiry: '2098-01-31' });
+  await assert.rejects(admin('/api/stock/transfer', { from: br.id, to: wh.id, lines: [{ item_id: it.id, qty: 11 }] }), /only 10 at/);
+  await assert.rejects(admin('/api/stock/transfer', { from: br.id, to: br.id, lines: [{ item_id: it.id, qty: 1 }] }), /same place/);
+  await assert.rejects(cashier('/api/stock/transfer', { from: br.id, to: wh.id, lines: [{ item_id: it.id, qty: 1 }] }), /Not allowed for Counter 1: Transfer stock/);
+  const t = await admin('/api/stock/transfer', { from: br.id, to: wh.id, lines: [{ item_id: it.id, qty: 7 }], note: 'Overflow' });
+  assert.match(t.no, /^TR-\d{4}$/);
+  const m = (await admin('/api/reports/x/stock_matrix')).rows.find((r) => r.item_id === it.id);
+  assert.deepEqual([m.qty[br.id], m.qty[wh.id], m.total], [3, 7, 10]);
+  const moved = (await admin('/api/reports/x/transfers')).find((x) => x.no === t.no);
+  assert.deepEqual([moved.from, moved.to, moved.units], [br.name, 'Gollapudi Warehouse', 7]);
+  // the store is now at 3 (alert 5): bring it back to 10 from the warehouse
+  const r = (await admin('/api/reports/x/restock')).find((x) => x.item_id === it.id);
+  assert.deepEqual([r.stock, r.need, r.from, r.qty], [3, 7, wh.id, 7]);
+  const loc = await admin('/api/reports/x/locations');
+  assert.equal(loc.find((x) => x.id === wh.id).kind, 'warehouse');
+  assert.ok((await admin('/api/reports/x/branch_sales?from=2000-01-01&to=2100-01-01')).some((x) => x.branch === 'Gollapudi Warehouse'));
+  // the owner can list every location's bills from this counter
+  assert.ok(Array.isArray(await admin('/api/invoices?type=sale&branch=all')));
+});
+
+test('companies: branches belong to one, items can be limited to some, bills by company, a company with branches cannot be deleted', async () => {
+  const br = (await admin('/api/bootstrap')).branch;
+  const a = await admin('/api/t/companies', { name: 'Fit Secrets', legal_name: 'Fit Secrets Nutrition Pvt Ltd', gstin: '37ABCDE1234F1Z5', state_code: '37' });
+  const b = await admin('/api/t/companies', { name: 'Green Basket', state_code: '36' });
+  await assert.rejects(cashier('/api/t/companies', { name: 'Nope' }), /Admin only/);
+  await admin('/api/t/branches', { id: br.id, company_id: a.id });
+  const hyd = await admin('/api/t/branches', { name: 'Green Basket Hyd', code: 'GBH', company_id: b.id, state_code: '36' });
+  const mine = await admin('/api/t/items', { name: 'Co Whey', sale_price: 1000, company_ids: [a.id] });
+  const theirs = await admin('/api/t/items', { name: 'Co Millets', sale_price: 200, company_ids: [b.id] });
+  const shared = await admin('/api/t/items', { name: 'Co Almonds', sale_price: 500 });
+  const names = (l) => l.filter((i) => i.name.startsWith('Co ')).map((i) => i.name).sort();
+  assert.deepEqual(names(await cashier('/api/items')), ['Co Almonds', 'Co Whey']); // this counter is in Fit Secrets
+  assert.deepEqual(names(await admin('/api/items?all=1')), ['Co Almonds', 'Co Millets', 'Co Whey']);
+  const boot = await admin('/api/bootstrap');
+  assert.deepEqual(boot.companies.map((c) => c.name).filter((n) => ['Fit Secrets', 'Green Basket'].includes(n)), ['Fit Secrets', 'Green Basket']);
+  const inv = await admin('/api/invoices', { lines: [{ item_id: shared.id, qty: 1 }], payments: [{ mode: 'cash', amount: 500 }] });
+  assert.ok((await admin(`/api/invoices?type=sale&branch=co:${a.id}`)).some((i) => i.id === inv.id));
+  assert.ok(!(await admin(`/api/invoices?type=sale&branch=co:${b.id}`)).some((i) => i.id === inv.id));
+  await assert.rejects(admin('/api/t/companies/' + b.id, null, 'DELETE'), /in this company/);
+  await admin('/api/t/branches/' + hyd.id, null, 'DELETE');
+  await admin('/api/t/companies/' + b.id, null, 'DELETE');
+  await admin('/api/t/branches', { id: br.id, company_id: null }); // leave the shared test branch as it was
+  void mine; void theirs;
+});
+
+test('logins: a cashier works only at the branches on their login, switches between those, and is locked out if the counter moves', async () => {
+  const anon = api();
+  const here = (await admin('/api/bootstrap')).branch;
+  const other = await admin('/api/t/branches', { name: 'Login Test Branch', code: 'LTB', state_code: '37' });
+  const away = await admin('/api/users', { name: 'Away Only', pin: '2222', role: 'cashier', branches: [other.id] });
+  const both = await admin('/api/users', { name: 'Both Places', pin: '3333', role: 'cashier', branches: [here.id, other.id] });
+  assert.ok(!(await anon('/api/bootstrap')).users.some((u) => u.id === away.id), 'not offered on a counter they cannot use');
+  await assert.rejects(anon('/api/login', { user_id: away.id, pin: '2222' }), /does not work at/);
+  assert.deepEqual((await admin('/api/users')).find((u) => u.id === both.id).branches.sort(), [here.id, other.id].sort());
+  const b = api((await anon('/api/login', { user_id: both.id, pin: '3333' })).token);
+  await assert.rejects(cashier('/api/branch/use', { id: other.id }), /cannot work at/); // an unrestricted cashier never moves the counter
+  await b('/api/branch/use', { id: other.id }); // the counter is now the other branch
+  const a = api((await anon('/api/login', { user_id: away.id, pin: '2222' })).token);
+  await a('/api/items');
+  await admin('/api/branch/use', { id: here.id }); // owner moves it back: Away Only is signed out
+  await assert.rejects(a('/api/items'), /does not work at this branch/);
+  await b('/api/items'); // still fine here
+  await admin('/api/users', { id: away.id, name: 'Away Only', role: 'cashier', active: 0 });
+  await admin('/api/users', { id: both.id, name: 'Both Places', role: 'cashier', active: 0 });
+});
+
+test('permissions: each cashier login has its own set, checked by the server; cost stays hidden and unchanged; changes apply at once', async () => {
+  const anon = api();
+  const it = await admin('/api/t/items', { name: 'Perm Whey', sale_price: 1000, purchase_price: 700, gst_rate: 18 });
+  await admin('/api/stock/adjust', { item_id: it.id, qty: 5 });
+  const { id } = await admin('/api/users', { name: 'Till Only', pin: '4444', role: 'cashier', perms: { dayclose: true } }); // the "Counter only" set
+  const t = api((await anon('/api/login', { user_id: id, pin: '4444' })).token);
+  await t('/api/invoices', { lines: [{ item_id: it.id, qty: 1 }], payments: [{ mode: 'cash', amount: 1000 }] }); // billing is always allowed
+  await assert.rejects(t('/api/invoices', { type: 'purchase', lines: [{ item_id: it.id, qty: 1, rate: 700 }] }), /Purchases/);
+  await assert.rejects(t('/api/invoices', { type: 'estimate', lines: [{ item_id: it.id, qty: 1 }] }), /Estimates/);
+  await assert.rejects(t('/api/payments', { direction: 'in', amount: 10, mode: 'cash' }), /Payments in & out/);
+  await assert.rejects(t('/api/t/items', { name: 'Sneaky' }), /Add & edit items/);
+  await assert.rejects(t('/api/stock/adjust', { item_id: it.id, qty: 1 }), /Correct stock/);
+  await assert.rejects(t('/api/reports/x/sale'), /Reports/);
+  await assert.rejects(t('/api/orders'), /Online store/);
+  assert.equal((await t('/api/items')).find((i) => i.id === it.id).purchase_price, null, 'cost hidden');
+  await assert.rejects(t('/api/reports/dashboard'), /Reports/); // Home shows the counter tiles instead
+  await assert.rejects(t('/api/t/payments'), /Payments/);
+  assert.equal((await t('/api/t/employees')).find((e) => 'salary' in e), undefined, 'names only, no salaries');
+  // the owner allows editing items (still no cost): the change applies without signing in again, and cost cannot be overwritten
+  await admin('/api/users', { id, name: 'Till Only', role: 'cashier', perms: { dayclose: true, items: true, items_edit: true } });
+  await t('/api/t/items', { id: it.id, sale_price: 1100, purchase_price: null });
+  const saved = (await admin('/api/items')).find((i) => i.id === it.id);
+  assert.deepEqual([saved.sale_price, saved.purchase_price], [1100, 700]);
+  await assert.rejects(t('/api/t/items/' + it.id, null, 'DELETE'), /Delete records/);
+  // a login with no set saved gets the minimum: billing, day close, items, adding a customer
+  const { id: plain } = await admin('/api/users', { name: 'Plain', pin: '5555', role: 'cashier' });
+  const pl = api((await anon('/api/login', { user_id: plain, pin: '5555' })).token);
+  await pl('/api/items');
+  await assert.rejects(pl('/api/reports/x/sale'), /Reports/);
+  await assert.rejects(pl('/api/t/offers', { kind: 'combo', name: 'x' }), /Offers/);
+  await admin('/api/users', { id: plain, name: 'Plain', role: 'cashier', active: 0 });
+  await admin('/api/users', { id, name: 'Till Only', role: 'cashier', active: 0 });
+  await assert.rejects(t('/api/items'), /Login required/); // turned off: signed out at once
+});
+
+test('PIN guessing: 5 wrong PINs lock that login for a while, even with the right PIN; others still sign in', async () => {
+  const anon = api();
+  const { id } = await admin('/api/users', { name: 'Guess Target', pin: '6789', role: 'cashier' });
+  for (let i = 0; i < 4; i++) await assert.rejects(anon('/api/login', { user_id: id, pin: '0000' }), /Wrong PIN/);
+  await assert.rejects(anon('/api/login', { user_id: id, pin: '0000' }), /Locked/);
+  await assert.rejects(anon('/api/login', { user_id: id, pin: '6789' }), /Too many wrong PINs\. Try again in 5 minutes/);
+  const owner = (await anon('/api/bootstrap')).users.find((u) => u.role === 'admin');
+  assert.ok((await anon('/api/login', { user_id: owner.id, pin: '1234' })).token, 'another login is not blocked');
+  await admin('/api/users', { id, name: 'Guess Target', role: 'cashier', active: 0 });
+});
+
+test('cheques: received → deposited → bounced puts the due back and undoes the deposit; issued → cleared; UPI lands in its bank', async () => {
+  const b = (await admin('/api/bootstrap')).branch;
+  await admin('/api/t/branches', { id: b.id, settings: { ...b.settings, banks: [{ id: 'chq1', name: 'HDFC Chq', takes_upi: true, takes_bank: true, opening: 0 }] } });
+  const bal = async () => Object.fromEntries((await admin('/api/reports/x/cash_bank')).map((r) => [r.mode, r.balance]));
+  const cust = await admin('/api/t/parties', { type: 'customer', name: 'Cheque Ravi', state_code: '37' });
+  const sup = await admin('/api/t/parties', { type: 'supplier', name: 'Cheque Supplier', state_code: '37' });
+  const due = async (id) => (await admin('/api/parties')).find((p) => p.id === id).balance;
+  const it = await admin('/api/t/items', { name: 'Cheque Whey', sale_price: 3000, gst_rate: 18 });
+  await admin('/api/stock/adjust', { item_id: it.id, qty: 5 });
+  const inv = await admin('/api/invoices', { party_id: cust.id, lines: [{ item_id: it.id, qty: 1 }], payments: [] }); // on credit
+  const before = await bal();
+  const p = await admin('/api/payments', { party_id: cust.id, invoice_id: inv.id, direction: 'in', amount: 3000, mode: 'cheque', ref: '000123', ref_date: '2099-01-10' });
+  await assert.rejects(admin(`/api/cheques/${p.id}`, { action: 'deposit', to_mode: 'bank:chq1' }), /dated 2099-01-10/); // post-dated: not before its date
+  let reg = (await admin('/api/cheques')).find((c) => c.id === p.id);
+  assert.deepEqual([reg.ref, reg.status, reg.post_dated, reg.bill], ['000123', 'pending', true, inv.no]);
+  assert.equal(await due(cust.id), 0);
+  await assert.rejects(admin(`/api/cheques/${p.id}`, { action: 'deposit', to_mode: 'cash', date: '2099-01-10' }), /bank account/);
+  await admin(`/api/cheques/${p.id}`, { action: 'deposit', to_mode: 'bank:chq1', date: '2099-01-10' });
+  let now = await bal();
+  assert.equal(round2((now['bank:chq1'] || 0) - (before['bank:chq1'] || 0)), 3000, 'money is in the bank');
+  assert.equal(round2((now.cheque || 0) - (before.cheque || 0)), 0, 'no longer a cheque in hand');
+  await admin(`/api/cheques/${p.id}`, { action: 'bounce' });
+  now = await bal();
+  assert.equal(round2((now['bank:chq1'] || 0) - (before['bank:chq1'] || 0)), 0, 'deposit reversed');
+  assert.equal(await due(cust.id), 3000, 'the customer owes again');
+  assert.equal((await admin('/api/invoices/' + inv.id)).status, 'unpaid');
+  reg = (await admin('/api/cheques')).find((c) => c.id === p.id);
+  assert.equal(reg.status, 'bounced', 'kept in the register');
+  await assert.rejects(admin(`/api/cheques/${p.id}`, { action: 'deposit', to_mode: 'bank:chq1' }), /not found|bounced/);
+  // a cheque we give a supplier leaves the bank when cleared
+  const q = await admin('/api/payments', { party_id: sup.id, direction: 'out', amount: 500, mode: 'cheque', ref: '777' });
+  await admin(`/api/cheques/${q.id}`, { action: 'clear', to_mode: 'bank:chq1' });
+  now = await bal();
+  assert.equal(round2((now['bank:chq1'] || 0) - (before['bank:chq1'] || 0)), -500);
+  assert.equal(round2((now.cheque || 0) - (before.cheque || 0)), 0);
+  // UPI received now shows in the bank marked for UPI
+  await admin('/api/invoices', { lines: [{ item_id: it.id, qty: 1 }], payments: [{ mode: 'upi', amount: 3000 }] });
+  now = await bal();
+  assert.equal(round2((now['bank:chq1'] || 0) - (before['bank:chq1'] || 0)), 2500);
+  // and so does a customer's bank transfer paid as plain "Bank"
+  await admin('/api/payments', { party_id: cust.id, direction: 'in', amount: 1000, mode: 'bank' });
+  now = await bal();
+  assert.equal(round2((now['bank:chq1'] || 0) - (before['bank:chq1'] || 0)), 3500);
+  await admin('/api/t/branches', { id: b.id, settings: b.settings });
+});
+
+test('security: saves cannot delete, cashiers cannot set a party\'s money terms, the lock screen gets no settings', async () => {
+  const anon = api();
+  const pre = await anon('/api/bootstrap');
+  assert.deepEqual([pre.branch.settings, pre.branches, pre.sync.email], [{}, [], undefined], 'nothing private before a PIN');
+  assert.ok(pre.users.length && pre.branch.name);
+  assert.ok((await admin('/api/bootstrap')).branches.length, 'signed in: everything');
+  const p = await cashier('/api/t/parties', { type: 'customer', name: 'Sec Party', state_code: '37' });
+  await cashier('/api/t/parties', { id: p.id, deleted: true });
+  assert.ok((await admin('/api/parties')).some((x) => x.id === p.id), 'a save never deletes');
+  await assert.rejects(cashier('/api/t/parties', { id: p.id, price_discount: 90 }), /Only the owner/);
+  await assert.rejects(cashier('/api/t/parties', { id: p.id, opening_balance: -5000 }), /Only the owner/);
+  await assert.rejects(cashier('/api/t/parties', { type: 'customer', name: 'Sec Two', rates: { x: 1 } }), /Only the owner/);
+  await cashier('/api/t/parties', { id: p.id, name: 'Sec Party Renamed', price_discount: 0, opening_balance: 0 }); // unchanged terms are fine
+  await admin('/api/t/parties', { id: p.id, price_discount: 5 });
+});
+
+test('a login limited to some branches cannot open bills of other branches', async () => {
+  const anon = api();
+  const here = (await admin('/api/bootstrap')).branch;
+  const inv = await admin('/api/invoices', { lines: [{ item_id: items[0].id, qty: 1 }], payments: [{ mode: 'cash', amount: 1e6 }] });
+  const away = await admin('/api/t/branches', { name: 'Bills Away', code: 'BAW', state_code: '37' });
+  const { id } = await admin('/api/users', { name: 'Away Bills', pin: '8642', role: 'cashier', branches: [away.id] });
+  await admin('/api/branch/use', { id: away.id });
+  const a = api((await anon('/api/login', { user_id: id, pin: '8642' })).token);
+  await assert.rejects(a('/api/invoices/' + inv.id), /Not found/);
+  await admin('/api/branch/use', { id: here.id });
+  await admin('/api/users', { id, name: 'Away Bills', role: 'cashier', active: 0 });
 });

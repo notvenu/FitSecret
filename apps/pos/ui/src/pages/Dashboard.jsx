@@ -1,12 +1,19 @@
 import { inr } from '@fitsecret/shared';
-import { useApi } from '../api.js';
+import { useApi, shop } from '../api.js';
+import { can } from '@fitsecret/shared/permissions';
+import { modeName } from '@fitsecret/shared/reports';
 import { Btn, Page, Money, Loading, Badge, STATUS_C, cx } from '../ui.jsx';
+import { InsightStrip } from './Insights.jsx';
+import { INSIGHT_SECTIONS } from '@fitsecret/shared/insights';
 
 const short = (n) => (n >= 1e5 ? `₹${(n / 1e5).toFixed(n >= 1e6 ? 0 : 1)}L` : n >= 1e3 ? `₹${(n / 1e3).toFixed(n >= 1e4 ? 0 : 1)}k` : `₹${Math.round(n)}`);
 const PIPE = [['placed', 'New'], ['confirmed', 'Confirmed'], ['packed', 'Packed'], ['shipped', 'Shipped'], ['out_for_delivery', 'Out for delivery']];
 
-export default function Dashboard({ user }) {
-  const { data: d } = useApi('/reports/dashboard');
+export default function Dashboard({ user, branch }) {
+  const full = can(user, 'reports'); // the shop's money and stock totals; other logins get the counter home
+  const { data: d } = useApi(full ? '/reports/dashboard' : null);
+  const rem = useApi(full && can(user, 'payments') ? '/reports/x/reminders' : null);
+  if (!full) return <CounterHome user={user} />;
   if (!d) return <Loading />;
   const days = [...Array(30)].map((_, i) => new Date(Date.now() - (29 - i) * 864e5).toLocaleDateString('en-CA'));
   const byDay = Object.fromEntries(d.series.map((s) => [s.date, s]));
@@ -14,10 +21,10 @@ export default function Dashboard({ user }) {
   const hour = new Date().getHours();
   const online30 = d.series.reduce((s, x) => s + x.online, 0), counter30 = d.series.reduce((s, x) => s + x.counter, 0);
   const pipeTotal = PIPE.reduce((s, [k]) => s + (d.orders[k] || 0), 0);
-  const isAdmin = user.role === 'admin';
+  const isAdmin = can(user, 'see_cost'); // profit and cost value only for logins allowed to see cost
 
   return (
-    <Page title={`Good ${hour < 12 ? 'morning' : hour < 17 ? 'afternoon' : 'evening'}, ${user.name.split(' ')[0]}`} actions={<>
+    <Page top={<InsightStrip user={user} branch={branch} sections={Object.keys(INSIGHT_SECTIONS)} limit={3} />} title={`Good ${hour < 12 ? 'morning' : hour < 17 ? 'afternoon' : 'evening'}, ${user.name.split(' ')[0]}`} actions={<>
       <Btn onClick={() => (location.hash = '#/bill/purchase')}>+ Purchase</Btn>
       <Btn v="brand" onClick={() => (location.hash = '#/bill/sale')}>+ New sale <kbd className="text-[10px] opacity-60">F1</kbd></Btn>
     </>}>
@@ -39,6 +46,8 @@ export default function Dashboard({ user }) {
           : <Stat label="Purchases (month)" v={inr(d.purchases_month.t)} sub={`${d.purchases_month.n} bills`} />}
         <Stat label="To collect · To pay" v={<><span className="text-flame">{short(d.receivable)}</span> <span className="text-black/25">/</span> {short(d.payable)}</>} sub="Customer dues · supplier dues" href="#/parties" />
       </div>
+
+      {rem.data && <Reminders r={rem.data} shopName={branch?.name} />}
 
       {/* Row 2: chart + payments */}
       <div className="mt-3 grid gap-3 lg:grid-cols-3">
@@ -73,7 +82,7 @@ export default function Dashboard({ user }) {
             <ul className="space-y-2.5">
               {d.payments_today.map((p) => (
                 <li key={p.mode} className="flex items-center justify-between text-sm">
-                  <span className="capitalize">{p.mode} <span className="text-xs text-black/40">· {p.n}</span></span>
+                  <span>{modeName(p.mode, shop)} <span className="text-xs text-black/40">· {p.n}</span></span>
                   <Money v={p.net} className="font-semibold" />
                 </li>
               ))}
@@ -153,7 +162,7 @@ export default function Dashboard({ user }) {
             </table>
           )}
         </div>
-        <List title="Reorder soon" empty="All stocked up" href="#/reports" rows={d.low_list} render={(i) => (
+        <List title="Reorder soon" empty="All stocked up" href="#/bill/purchase_order?low=1" rows={d.low_list} render={(i) => (
           <><span className="min-w-0 flex-1 truncate">{i.name}</span><Badge c={i.qty <= 0 ? 'red' : 'amber'}>{i.qty}</Badge></>
         )} />
       </div>
@@ -166,6 +175,67 @@ export default function Dashboard({ user }) {
           </div>
         </div>
       )}
+    </Page>
+  );
+}
+
+// Payment reminders: what customers owe and what we owe suppliers, overdue first, then due within a week.
+const when = (r) => (r.days == null ? 'opening balance' : r.days > 0 ? `${r.days} day${r.days > 1 ? 's' : ''} overdue` : r.days === 0 ? 'due today' : `due in ${-r.days} day${r.days < -1 ? 's' : ''}`);
+const wa = (r, shopName) => `https://wa.me/91${r.phone.replace(/\D/g, '').slice(-10)}?text=${encodeURIComponent(`Hello ${r.name}, a gentle reminder from ${shopName || 'Fit Secrets'}: ₹${r.amount} is due${r.no !== 'Opening balance' ? ` on bill ${r.no}` : ''}. Thank you!`)}`;
+function Reminders({ r, shopName }) {
+  if (!r.collect.length && !r.pay.length && !r.other.length) return null;
+  const col = (title, rows, tone, all, act) => (
+    <div className="min-w-0">
+      <div className="mb-2 flex items-baseline justify-between gap-2">
+        <span className="text-sm font-semibold">{title} <span className={cx('tabular-nums', tone)}>{inr(rows.reduce((s, x) => s + x.amount, 0))}</span></span>
+        <a href={all} className="text-xs text-black/45 hover:text-ink">All →</a>
+      </div>
+      {!rows.length ? <p className="text-sm text-black/40">Nothing due this week</p> : (
+        <ul className="divide-y divide-line">
+          {rows.slice(0, 5).map((x) => (
+            <li key={x.party_id + x.no} className="flex items-center gap-3 py-2 text-sm">
+              <span className="min-w-0 flex-1"><span className="block truncate font-medium">{x.name}</span>
+                <span className={cx('text-xs', x.days > 0 || x.days == null ? 'text-flame' : 'text-black/50')}>{x.no !== 'Opening balance' && <span className="font-mono">{x.no} · </span>}{when(x)}</span></span>
+              <Money v={x.amount} className="font-semibold" />
+              {act(x)}
+            </li>
+          ))}
+          {rows.length > 5 && <li className="pt-2 text-xs text-black/45">+{rows.length - 5} more</li>}
+        </ul>
+      )}
+    </div>
+  );
+  const btn = 'shrink-0 rounded-full px-3 py-1 text-xs font-semibold';
+  return (
+    <section className="card mt-3 p-5" aria-label="Reminders">
+      <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-black/50">Reminders</div>
+      {r.other.length > 0 && <div className="mb-4 flex flex-wrap gap-2">{r.other.map((o) => (
+        <a key={o.id} href={o.href} className={cx('rounded-[12px] px-3 py-2 text-sm', o.level === 'bad' ? 'bg-red-50 text-red-800' : 'bg-amber-50 text-amber-900')}>
+          <b>{o.title}</b><span className="block text-xs opacity-80">{o.detail}</span></a>
+      ))}</div>}
+      <div className="grid gap-6 md:grid-cols-2">
+        {col('To collect', r.collect, 'text-flame', '#/followups?tab=dues', (x) => (x.phone
+          ? <a href={wa(x, shopName)} target="_blank" rel="noreferrer" className={cx(btn, 'bg-brand text-ink hover:bg-ink hover:text-white')}>Remind</a>
+          : <a href={'#/payments/in?new=1'} className={cx(btn, 'border border-line hover:border-ink')}>Receive</a>))}
+        {col('To pay', r.pay, 'text-ink', '#/parties', () => <a href="#/payments/out?new=1" className={cx(btn, 'border border-line hover:border-ink')}>Pay</a>)}
+      </div>
+    </section>
+  );
+}
+
+// Home for a cashier login: only the things it can do, as big buttons.
+function CounterHome({ user }) {
+  const hour = new Date().getHours();
+  const tiles = [['New sale', 'F1', '#/bill/sale', true], ['Quick Billing', 'Full-screen billing, several bills at once', '#/pos', true],
+    ['Today’s bills', 'Reprint or share a bill', '#/invoices?type=sale', true], ['Find an item', 'Price, stock, batches', '#/items', can(user, 'items')],
+    ['Sale return', 'Take goods back', '#/bill/sale_return', can(user, 'returns')], ['Receive payment', 'A customer pays their dues', '#/payments/in?new=1', can(user, 'payments')],
+    ['Website orders', 'Pack and ship', '#/online/orders', can(user, 'online')], ['Day close', 'Count the drawer', '#/dayclose', can(user, 'dayclose')]].filter((t) => t[3]);
+  return (
+    <Page title={`Good ${hour < 12 ? 'morning' : hour < 17 ? 'afternoon' : 'evening'}, ${user.name.split(' ')[0]}`}>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{tiles.map(([l, sub, href], i) => (
+        <a key={href} href={href} className={cx('card block p-5 transition-shadow hover:shadow-md', i === 0 && '!bg-ink text-white')}>
+          <div className="display text-2xl">{l}</div><div className={cx('mt-1 text-sm', i === 0 ? 'text-brand' : 'text-black/55')}>{sub}</div></a>
+      ))}</div>
     </Page>
   );
 }

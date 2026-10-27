@@ -134,3 +134,74 @@ test('invoice extras: prefixes, TCS on top, due date from terms, currency needs 
   assert.equal(invoiceExtras({}, null, { date: '2026-10-22', total: 50 }).total, 50);
   assert.throws(() => invoiceExtras({ currency: 'USD' }, null, { date: '2026-10-22', total: 1 }), /USD exchange rate/);
 });
+
+test('e-way bill JSON: pincodes from addresses, IGST rates for inter-state, URP for unregistered', async () => {
+  const { ewayJson } = await import('../gstjson.js');
+  const inv = { no: 'VJA/26-27/0042', date: '2026-10-27', party_name: 'Gym Co', party_gstin: '', party_state: '36', ship_to: 'Plot 4, Madhapur, Hyderabad 500081',
+    taxable: 50000, cgst: 0, sgst: 0, igst: 9000, total: 59000, lines: [{ name: 'Whey 2kg', hsn: '2106', qty: 10, taxable: 50000, gst_rate: 18 }] };
+  const j = ewayJson(inv, { name: 'Fit Secrets', gstin: '37abcde1234f1z5', address: 'MG Road, Vijayawada 520010', state_code: '37' }, null, { distance: 275, vehicle: 'ap 16 ab 1234' }).billLists[0];
+  assert.equal(j.fromPincode, 520010);
+  assert.equal(j.toPincode, 500081);
+  assert.equal(j.toGstin, 'URP');
+  assert.equal(j.userGstin, '37ABCDE1234F1Z5');
+  assert.equal(j.docDate, '27/10/2026');
+  assert.equal(j.vehicleNo, 'AP16AB1234');
+  assert.deepEqual([j.itemList[0].igstRate, j.itemList[0].cgstRate], [18, 0]);
+  assert.equal(j.mainHsnCode, 2106);
+});
+
+test('insights: reorder from sales pace, dead stock only after 60 days on the shelf; weekly plan ranks by urgency and money', async () => {
+  const { weeklyPlan } = await import('../insights.js');
+  const day = (n) => new Date(Date.now() - n * 864e5).toLocaleDateString('en-CA');
+  const B = 'b1', T = { branches: [{ id: B, settings: {} }], parties: [{ id: 'p1', name: 'Asha Rao', phone: '9000000001', type: 'customer' }],
+    items: [{ id: 'fast', name: 'Whey 1kg', sale_price: 2000, purchase_price: 1600 }, { id: 'old', name: 'Old Bar', sale_price: 100, purchase_price: 60 }, { id: 'new', name: 'New Bar', sale_price: 100, purchase_price: 60 }],
+    invoices: [], invoice_lines: [], payments: [], expenses: [], categories: [], journals: [], accounts: [], employees: [], attendance: [], day_closes: [], audit_log: [], orders: [],
+    stock_movements: [{ branch_id: B, item_id: 'fast', qty: 4, created_at: day(90) + 'T05:00:00Z' }, { branch_id: B, item_id: 'old', qty: 50, created_at: day(120) + 'T05:00:00Z' },
+      { branch_id: B, item_id: 'new', qty: 50, created_at: day(2) + 'T05:00:00Z' }] };
+  for (let i = 0; i < 20; i++) {
+    const id = 'i' + i, date = day(i + 1);
+    T.invoices.push({ id, branch_id: B, type: 'sale', no: 'S' + i, date, created_at: date + 'T06:00:00Z', party_id: i % 2 ? 'p1' : null, party_name: i % 2 ? 'Asha Rao' : 'Cash Sale', total: 2000, paid: 2000, subtotal: 2000, discount: 0, status: 'paid' });
+    T.invoice_lines.push({ id: 'l' + i, invoice_id: id, item_id: 'fast', name: 'Whey 1kg', qty: 1, rate: 2000, taxable: 1695, tax: 305, total: 2000, cost: 1600 });
+  }
+  const ins = runReport('insights', (t) => T[t] || [], B, { today: day(0) });
+  const reorder = ins.stock.insights.find((x) => x.id === 'reorder');
+  assert.ok(reorder && reorder.table.rows[0].item === 'Whey 1kg', '20 sold in 20 days with 4 left (about 6 days of cover) must be reordered');
+  const dead = ins.stock.insights.find((x) => x.id === 'dead');
+  assert.deepEqual(dead.table.rows.map((r) => r.item), ['Old Bar'], 'stock that arrived 2 days ago is not dead');
+  const plan = weeklyPlan(ins);
+  assert.equal(plan[0].id, 'stock:reorder', 'the urgent stock-out comes first');
+  assert.equal(plan[0].priority, 'high');
+  assert.ok(plan[0].impact > 0 && plan[0].steps.length >= 2);
+  assert.ok(plan.every((a, i) => i === 0 || ['high', 'medium', 'low'].indexOf(plan[i - 1].priority) <= ['high', 'medium', 'low'].indexOf(a.priority)), 'sorted by priority');
+});
+
+test('variants: sizes and flavours of one product group together; different products and already-grouped items do not', async () => {
+  const { findVariantGroups, parseVariant, productName } = await import('../variants.js');
+  assert.deepEqual(parseVariant('ON Gold Standard whey Chocolate Flavour 2.27kg'), { base: ['on', 'gold', 'standard', 'whey'], size: '2.27kg', flavour: 'Chocolate' });
+  assert.equal(productName('ON Gold Standard whey Vanilla Ice cream Flavour 2.27kg', '2.27kg', 'Vanilla Ice Cream'), 'ON Gold Standard whey');
+  const items = [
+    { id: '1', name: 'ON Gold Standard whey Chocolate Flavour 907g' }, { id: '2', name: 'ON Gold Standard whey Vanilla Ice cream Flavour 2.27kg' },
+    { id: '3', name: 'ON Gold Standard Isolate Chocolate Flavour' }, { id: '4', name: 'Wellx peanut butter rabdi silky 1kg' },
+    { id: '5', name: 'Wellx Mix Fruit Peanut Butter (Crunchy)' }, { id: '6', name: 'MB Biozyme Whey PR 1kg', group_key: 'g' }, { id: '7', name: 'MB Biozyme Whey PR 2kg', group_key: 'g' },
+  ];
+  const g = findVariantGroups(items);
+  assert.deepEqual(g.map((x) => x.items.map((i) => i.id).sort()), [['1', '2'], ['4', '5']], 'isolate stays apart; already-grouped Biozyme is left alone');
+  assert.equal(g[0].items.find((i) => i.id === '2').flavour, 'Vanilla Ice Cream');
+});
+
+test('reminders: party balance sits on its newest unpaid bills; paid bills and far-off due dates stay out', () => {
+  const B = 'b1', d = (n) => new Date(Date.now() + n * 864e5).toLocaleDateString('en-CA');
+  const inv = (id, type, party_id, date, total, paid, due_date) => ({ id, branch_id: B, type, no: id, party_id, date, total, paid, due_date, status: 'unpaid', created_at: date });
+  const data = {
+    branches: [{ id: B }], parties: [{ id: 'c', name: 'Ravi', phone: '9876543210' }, { id: 's', name: 'Nutri' }, { id: 'f', name: 'Later' }],
+    invoices: [inv('S1', 'sale', 'c', d(-17), 1800, 500, d(-7)), inv('S2', 'sale', 'c', d(-1), 105, 105),
+      inv('P1', 'purchase', 's', d(0), 3540, 0, d(3)), inv('P2', 'purchase', 'f', d(0), 900, 0, d(40))],
+    payments: [{ id: 'y0', branch_id: B, party_id: 'c', invoice_id: 'S1', direction: 'in', amount: 500, date: d(-17), mode: 'cash' },
+      { id: 'y2', branch_id: B, party_id: 'c', invoice_id: 'S2', direction: 'in', amount: 105, date: d(-1), mode: 'upi' },
+      { id: 'y1', branch_id: B, party_id: 'c', direction: 'in', amount: 200, date: d(-2), mode: 'cash' }], // on account
+  };
+  const r = runReport('reminders', (t) => data[t] || [], B, {});
+  // 1800 + 105 − 500 − 105 − 200 = 1100 owed, all of it on S1 (S2 is paid), 7 days overdue
+  assert.deepEqual(r.collect.map((x) => [x.no, x.amount, x.days]), [['S1', 1100, 7]]);
+  assert.deepEqual(r.pay.map((x) => [x.no, x.amount, x.days]), [['P1', 3540, -3]]); // P2 is due in 40 days
+});

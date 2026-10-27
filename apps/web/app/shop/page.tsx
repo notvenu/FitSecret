@@ -2,6 +2,9 @@ import Link from 'next/link';
 import type { Metadata } from 'next';
 import { getProducts, getCategories, discount, type Product } from '@/lib/catalog';
 import ProductCard from '@/components/ProductCard';
+import { Reveal } from '@/components/Motion';
+import { Slot } from '@/components/Rack';
+import AisleSign from '@/components/AisleSign';
 
 export const revalidate = 60;
 export const metadata: Metadata = { title: 'Shop supplements', description: 'Supplements, dry fruits, millets, Ayurvedic and organic products. Shop online or visit our Vijayawada store.' };
@@ -36,7 +39,7 @@ export default async function Shop({ searchParams }: { searchParams: Promise<SP>
   return (
     <div className="mx-auto max-w-7xl px-4 pt-10 md:px-6">
       <div className="flex flex-wrap items-end justify-between gap-4 border-b border-line pb-6">
-        <h1 className="display text-[clamp(2.8rem,7vw,6rem)]">{title}</h1>
+        <AisleSign key={title} as="h1" className="hero-in" label={sp.q ? 'Search' : cat ? `Aisle ${String(cats.indexOf(cat) + 1).padStart(2, '0')}` : 'The whole store'} title={title} />
         <span className="pb-2 text-sm text-mute">{list.length} products</span>
       </div>
 
@@ -81,9 +84,20 @@ export default async function Shop({ searchParams }: { searchParams: Promise<SP>
             {SORTS.map(([k, l]) => <Link key={k} href={href({ sort: k || undefined })} scroll={false} className={`whitespace-nowrap ${(sp.sort || '') === k ? 'font-semibold underline decoration-brand decoration-2 underline-offset-4' : 'text-mute hover:text-ink'}`}>{l}</Link>)}
           </div>
 
-          {list.length ? (
+          {list.length ? sp.q ? (
+            // search results stay a plain grid: easier to compare matches side by side
             <div className="mt-8 grid grid-cols-2 gap-x-4 gap-y-10 md:grid-cols-3">
-              {list.map((p) => <ProductCard key={p.key} p={p} />)}
+              {list.map((p, i) => <Reveal key={p.key} delay={(i % 3) * 0.06}><ProductCard p={p} /></Reveal>)}
+            </div>
+          ) : (
+            <div className="mt-6">
+              <div className="shelf-unit">
+                <ul aria-label={`${title} shelf`} className="grid grid-cols-2 [--tier:150px] sm:grid-cols-3 md:[--tier:175px] xl:grid-cols-4">
+                  {list.map((p) => <Slot key={p.key} p={p} />)}
+                  {PADS.map((k) => <EmptySlot key={k} cls={padClass(k, list.length)} />)}
+                </ul>
+              </div>
+              <div aria-hidden className="shelf-plinth" />
             </div>
           ) : (
             <div className="py-24 text-center">
@@ -95,5 +109,23 @@ export default async function Shop({ searchParams }: { searchParams: Promise<SP>
         </div>
       </div>
     </div>
+  );
+}
+
+// Empty shelf space so the last shelf runs edge to edge at 2, 3 and 4 columns (sm / xl breakpoints match the grid above).
+const PADS = [0, 1, 2];
+const padClass = (k: number, n: number) => [
+  k < (2 - (n % 2)) % 2 ? 'flex' : 'hidden',
+  k < (3 - (n % 3)) % 3 ? 'sm:flex' : 'sm:hidden',
+  k < (4 - (n % 4)) % 4 ? 'xl:flex' : 'xl:hidden',
+].join(' ');
+
+function EmptySlot({ cls }: { cls: string }) {
+  return (
+    <li aria-hidden className={`shelf-slot ${cls}`}>
+      <div className="shelf-space" />
+      <div className="shelf-board" />
+      <div className="shelf-lip"><div className="shelf-label invisible"><span className="block text-[11px] leading-tight">-</span><span className="block text-[10px] leading-tight md:hidden">-</span><span className="mt-0.5 block h-8" /></div></div>
+    </li>
   );
 }

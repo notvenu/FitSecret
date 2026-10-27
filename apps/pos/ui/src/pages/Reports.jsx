@@ -1,8 +1,11 @@
 import { useState } from 'react';
+import { downloadJson } from './Invoices.jsx';
 import { inr, today, round2 } from '@fitsecret/shared';
-import { useApi, downloadCsv } from '../api.js';
-import { Btn, Field, Table, Money, Loading, Badge, cx } from '../ui.jsx';
-import { REPORTS as SHARED } from '@fitsecret/shared/reports';
+import { api, fail, useApi, downloadCsv, shop, go } from '../api.js';
+import { can } from '@fitsecret/shared/permissions';
+import { InsightStrip } from './Insights.jsx';
+import { Btn, Field, Table, Money, Loading, Badge, SideNav, SidePage, cx, ModeOptions } from '../ui.jsx';
+import { REPORTS as SHARED, modeName } from '@fitsecret/shared/reports';
 
 // Vyapar's report list. Built-in screens (day book, P&L, GSTR-1, stock...) plus the shared table reports in packages/shared/reports.js.
 const BUILTIN = {
@@ -10,33 +13,30 @@ const BUILTIN = {
   gst: ['GSTR-1, GSTR-3B & HSN Summary', 'GST reports', true], stock: ['Stock summary', 'Item/ Stock report'], low: ['Low Stock Summary', 'Item/ Stock report'],
   expiry: ['Expiring batches', 'Item/ Stock report'],
 };
-const GROUPS = ['Transaction report', 'Party report', 'GST reports', 'Item/ Stock report', 'Business Status', 'Taxes', 'Expense report', 'Sale/ Purchase Order report'];
-const LIST = GROUPS.map((g) => [g, [
-  ...Object.entries(BUILTIN).filter(([, [, gr]]) => gr === g).map(([k, [t, , admin]]) => ({ k, t, admin })),
-  ...Object.entries(SHARED).filter(([, r]) => r.group === g && !r.hidden).map(([k, r]) => ({ k, t: r.title, admin: r.admin })),
-]]);
+const GROUPS = ['Favourites', 'Transaction report', 'Party report', 'GST reports', 'Item/ Stock report', 'Business Status', 'Taxes', 'Expense report', 'Sale/ Purchase Order report'];
+const ALL = [...Object.entries(BUILTIN).map(([k, [t, g, admin]]) => ({ k, t, g, admin })), ...Object.entries(SHARED).filter(([, r]) => !r.hidden).map(([k, r]) => ({ k, t: r.title, g: r.group, admin: r.admin }))];
+// The reports this counter opens most sit on top; the star next to a report title adds / removes it (kept per device).
+const FAV_DEFAULT = ['daybook', 'sale', 'stock', 'balances', 'gst', 'pnl'];
+const favs = () => { try { return JSON.parse(localStorage.getItem('fs_fav_reports')) || FAV_DEFAULT; } catch { return FAV_DEFAULT; } };
 
-export default function Reports({ user, route }) {
-  const [r, setR] = useState(route?.query.r || 'sale');
+// Report = ?r= in the URL, so links from Insights and Day close open the right one.
+export default function Reports({ user, route, branch }) {
+  const ok = (x) => !x.admin || can(user, 'see_cost'); // owner-level reports (profit, all branches) need 'see cost & profit'
+  const r = ALL.some((x) => x.k === route?.query.r && ok(x)) ? route.query.r : 'daybook';
+  const [fav, setFav] = useState(favs);
+  const star = () => { const f = fav.includes(r) ? fav.filter((x) => x !== r) : [...fav, r]; setFav(f); try { localStorage.setItem('fs_fav_reports', JSON.stringify(f)); } catch { /* not saved */ } };
+  const groups = GROUPS.map((g) => ({ label: g, items: (g === 'Favourites' ? fav.map((k) => ALL.find((x) => x.k === k)).filter(Boolean) : ALL.filter((x) => x.g === g)).filter(ok).map((x) => ({ key: x.k, label: x.t, words: g })) }));
   const [range, setRange] = useState({ from: today().slice(0, 8) + '01', to: today() });
   const [date, setDate] = useState(today());
   const qs = `from=${range.from}&to=${range.to}`;
-  const ok = (x) => !x.admin || user.role === 'admin';
   const title = BUILTIN[r]?.[0] || SHARED[r]?.title;
+  const open = (k, enter) => { go('/reports?r=' + k); if (enter) requestAnimationFrame(() => document.querySelector('[data-report] :is(input, select, button)')?.focus()); };
   return (
-    <div className="flex h-full">
-      <nav className="w-60 shrink-0 overflow-y-auto border-r border-line bg-white py-2 text-[13px]">
-        {LIST.map(([g, rs]) => rs.some(ok) && (
-          <div key={g} className="mb-1">
-            <div className="bg-brand/15 px-4 py-1.5 text-xs font-semibold text-brand-d">{g}</div>
-            {rs.filter(ok).map((x) => (
-              <button key={x.k} onClick={() => setR(x.k)} className={cx('block w-full px-4 py-1.5 text-left', r === x.k ? 'bg-brand/30 font-semibold text-ink' : 'text-black/70 hover:bg-paper')}>{x.t}</button>
-            ))}
-          </div>
-        ))}
-      </nav>
-      <div className="rise min-w-0 flex-1 overflow-y-auto p-5 lg:p-7">
-        <h1 className="display mb-4 text-2xl">{title}</h1>
+    <SidePage nav={<SideNav title="Reports" search placeholder="Find a report…  e.g. GST, stock" groups={groups} value={r} onChange={open} />}>
+      <InsightStrip user={user} branch={branch} sections={['profit']} />
+      <div data-report>
+        <h2 className="display mb-4 flex items-center gap-2 text-2xl">{title}
+          <button onClick={star} className={cx('text-xl', fav.includes(r) ? 'text-amber-500' : 'text-black/20 hover:text-amber-500')} title={fav.includes(r) ? 'Remove from favourites' : 'Add to favourites'} aria-label="Favourite">★</button></h2>
         {['pnl', 'gst'].includes(r) && (
           <div className="mb-3 flex gap-2">
             <Field label="From" type="date" value={range.from} onChange={(e) => setRange({ ...range, from: e.target.value })} />
@@ -53,7 +53,7 @@ export default function Reports({ user, route }) {
         {r === 'balances' && <Balances />}
         {SHARED[r] && <Generic key={r} name={r} range={range} setRange={setRange} />}
       </div>
-    </div>
+    </SidePage>
   );
 }
 
@@ -76,7 +76,7 @@ function Generic({ name, range, setRange }) {
         <Field label="Party" list="rep-parties" value={p.party} onChange={(e) => setP({ ...p, party: e.target.value })} placeholder="Type a party name" className="w-64" /></>}
       {R.params.includes('item') && <><datalist id="rep-items">{items.data?.map((x) => <option key={x.id} value={x.name} />)}</datalist>
         <Field label="Item" list="rep-items" value={p.item} onChange={(e) => setP({ ...p, item: e.target.value })} placeholder="Type an item name" className="w-80" /></>}
-      {R.params.includes('mode') && <Field label="Account"><select className="input" value={p.mode} onChange={(e) => setP({ ...p, mode: e.target.value })}>{['cash', 'upi', 'card', 'bank', 'cheque'].map((m) => <option key={m}>{m}</option>)}</select></Field>}
+      {R.params.includes('mode') && <Field label="Account"><select className="input" value={p.mode} onChange={(e) => setP({ ...p, mode: e.target.value })}><ModeOptions cheque /></select></Field>}
       {R.params.includes('to') && <Field label="As of" type="date" value={range.to} onChange={(e) => setRange({ ...range, to: e.target.value })} />}
       {R.params.includes('range') && <>
         <Field label="From" type="date" value={range.from} onChange={(e) => setRange({ ...range, from: e.target.value })} />
@@ -112,16 +112,16 @@ function DayBook({ date }) {
   if (!data) return <Loading />;
   return <>
     <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
-      {data.cash.map((c) => <div key={c.mode} className="card p-3"><div className="text-xs uppercase text-black/50">{c.mode} net</div><Money v={c.net} className="text-lg font-semibold" /></div>)}
+      {data.cash.map((c) => <div key={c.mode} className="card p-3"><div className="text-xs uppercase text-black/50">{modeName(c.mode, shop)} net</div><Money v={c.net} className="text-lg font-semibold" /></div>)}
     </div>
     <Section title="Invoices" rows={data.invoices}><Table rows={data.invoices} columns={[
       { k: 'no', label: 'No' }, { k: 'type', label: 'Type' }, { k: 'party_name', label: 'Party' },
       { k: 'status', label: 'Status' }, { k: 'total', label: 'Total', right: true, r: (x) => <Money v={x.total} /> }]} /></Section>
     <Section title="Payments" rows={data.payments}><Table rows={data.payments} columns={[
-      { k: 'direction', label: 'In/Out' }, { k: 'party', label: 'Party' }, { k: 'invoice_no', label: 'Invoice' }, { k: 'mode', label: 'Mode' },
+      { k: 'direction', label: 'In/Out' }, { k: 'party', label: 'Party' }, { k: 'invoice_no', label: 'Invoice' }, { k: 'mode', label: 'Mode', r: (x) => modeName(x.mode, shop) },
       { k: 'amount', label: 'Amount', right: true, r: (x) => <Money v={x.amount} className={x.direction === 'out' ? 'text-red-600' : ''} /> }]} /></Section>
     <Section title="Expenses" rows={data.expenses}><Table rows={data.expenses} columns={[
-      { k: 'category', label: 'Category' }, { k: 'note', label: 'Note' }, { k: 'mode', label: 'Mode' }, { k: 'amount', label: 'Amount', right: true, r: (x) => <Money v={x.amount} /> }]} /></Section>
+      { k: 'category', label: 'Category' }, { k: 'note', label: 'Note' }, { k: 'mode', label: 'Mode', r: (x) => modeName(x.mode, shop) }, { k: 'amount', label: 'Amount', right: true, r: (x) => <Money v={x.amount} /> }]} /></Section>
   </>;
 }
 
@@ -150,7 +150,15 @@ function Gst({ qs }) {
   // ponytail: all sales land in 3.1(a); nil-rated/exempt split (3.1(c)) needs a per-line breakup if the CA asks for it
   const net = (a, b) => Object.fromEntries(['taxable', 'igst', 'cgst', 'sgst'].map((k) => [k, round2((t[a]?.[k] || 0) - (t[b]?.[k] || 0))]));
   const gstr3b = [{ row: '3.1(a) Outward taxable supplies', ...net('sale', 'sale_return') }, { row: '4(A)(5) Eligible ITC, all other', ...net('purchase', 'purchase_return') }];
+  const json = () => api('/reports/x/gstr1_json?' + qs).then((j) => {
+    if (!j.gstin) return fail(new Error('Add the store GSTIN in Settings first'));
+    downloadJson(`GSTR1_${j.gstin}_${j.fp}`, j);
+  }, fail);
   return <>
+    <div className="card mb-4 flex flex-wrap items-center gap-3 px-4 py-3 text-sm">
+      <span className="flex-1">File GSTR-1 without retyping: download the JSON and upload it on <b>gst.gov.in → Returns → GSTR-1 → Prepare offline → Upload</b>. Pick one month (or quarter) above.</span>
+      <Btn v="primary" onClick={json}>Download GSTR-1 JSON</Btn>
+    </div>
     <div className="mb-4 grid grid-cols-3 gap-3">
       <div className="card p-3"><div className="text-xs text-black/50">Output tax</div><Money v={out} className="text-lg font-semibold" /></div>
       <div className="card p-3"><div className="text-xs text-black/50">Input tax credit</div><Money v={inp} className="text-lg font-semibold" /></div>
@@ -168,7 +176,7 @@ function Gst({ qs }) {
       { k: 'hsn', label: 'HSN' }, { k: 'rate', label: 'Rate', r: (x) => x.rate + '%' }, { k: 'qty', label: 'Qty', right: true },
       { k: 'taxable', label: 'Taxable', right: true }, { k: 'tax', label: 'Tax', right: true }]} /></Section>
     <Section title="Credit notes" rows={data.credit_notes} name="gstr1-cdnr"><Table rows={data.credit_notes} empty="None" columns={[
-      { k: 'no', label: 'No' }, { k: 'date', label: 'Date' }, { k: 'party_name', label: 'Party' }, { k: 'total', label: 'Total', right: true }]} /></Section>
+      { k: 'no', label: 'No' }, { k: 'date', label: 'Date' }, { k: 'ref_no', label: 'Against invoice' }, { k: 'party_name', label: 'Party' }, { k: 'total', label: 'Total', right: true }]} /></Section>
   </>;
 }
 
@@ -177,6 +185,7 @@ function Stock({ low }) {
   const rows = low ? data?.filter((i) => i.qty <= (i.low_stock || 0)) : data;
   return (
     <Section title={low ? 'Low stock — reorder' : 'Stock summary'} rows={rows} name="stock">
+      {low && rows?.length > 0 && <div className="px-4 pt-3"><a href="#/bill/purchase_order?low=1"><Btn v="primary" size="sm">Create purchase order for these</Btn></a></div>}
       <Table rows={rows} empty="All stocked up 💪" columns={[
         { k: 'name', label: 'Item' }, { k: 'category', label: 'Category' },
         { k: 'qty', label: 'Qty', right: true, r: (i) => <Badge c={i.qty <= 0 ? 'red' : i.qty <= (i.low_stock || 0) ? 'amber' : 'green'}>{i.qty}</Badge> },

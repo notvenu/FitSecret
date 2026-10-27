@@ -16,6 +16,7 @@ export default function Account() {
   const [sent, setSent] = useState(false);
   const [err, setErr] = useState('');
   const [orders, setOrders] = useState<Order[] | null>(null);
+  const [points, setPoints] = useState(0); // loyalty points in ₹ (counter and website share one balance)
 
   useEffect(() => {
     if (!sb) return setReady(true);
@@ -28,6 +29,7 @@ export default function Account() {
     if (!sb || !user) return;
     sb.from('orders').select('id, order_no, phone, status, total, created_at, order_lines(name, qty)').order('created_at', { ascending: false })
       .then(({ data }) => setOrders((data as Order[]) || []));
+    sb.rpc('my_points').then(({ data }) => setPoints(Number(data?.value) || 0));
   }, [sb, user]);
 
   const login = async (e: React.FormEvent) => {
@@ -58,6 +60,7 @@ export default function Account() {
         <span>{user.email}</span>
         <button onClick={() => sb.auth.signOut()} className="inline-flex items-center gap-1 hover:text-ink"><SignOut /> Sign out</button>
       </div>
+      {points > 0 && <p className="mt-5 rounded-[var(--radius-card)] bg-brand/15 p-4 text-sm"><b>{inr(points)}</b> of loyalty points to spend: tick “Use my loyalty points” at checkout, or ask at the store counter.</p>}
       {!orders ? <div className="mt-8 h-24 animate-pulse rounded-[var(--radius-card)] bg-surface" /> : !orders.length ? (
         <p className="mt-10 text-mute">No orders yet. Orders placed while signed in show up here.</p>
       ) : (

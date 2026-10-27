@@ -20,8 +20,9 @@ export function orderError(msg: string) {
     INVALID_PHONE: 'Enter a valid 10-digit mobile number.', INVALID_NAME: 'Enter your full name.',
     INVALID_ADDRESS: 'Enter a complete address with a 6-digit pincode.', EMPTY_CART: 'Your cart is empty.',
     ITEM_UNAVAILABLE: 'An item in your cart is no longer available.', COD_UNAVAILABLE: 'Cash on delivery is not available for this order. Please pay online.',
-    INVALID_QTY: 'Maximum 20 units per item.', STORE_NOT_READY: 'Online ordering is being set up. Please call us to order.',
+    INVALID_QTY: 'Maximum 100 units per item. For more, send a bulk enquiry.', STORE_NOT_READY: 'Online ordering is being set up. Please call us to order.',
     STORE_CLOSED: 'Online orders are paused right now. Please call or visit the store.',
+    POINTS_SIGN_IN: 'Sign in (My account) to use your loyalty points.',
     TOO_MANY: 'Too many messages from this number today. Please call or WhatsApp us.', BAD_RATING: 'Pick a star rating.',
     REVIEW_TOO_SHORT: 'Tell us a little more (at least 10 characters).', EMPTY_MESSAGE: 'Type your message.',
   } as Record<string, string>)[msg.split(':')[0]] || 'Something went wrong. Please try again.';
