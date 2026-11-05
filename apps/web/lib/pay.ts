@@ -20,8 +20,8 @@ export async function payOnline(order: { id: string; name: string; phone: string
   if (!r.ok) throw new Error(rz.error || 'Payment could not start');
   return new Promise<boolean>((resolve, reject) => {
     new window.Razorpay!({
-      key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID, order_id: rz.id, amount: rz.amount, currency: 'INR', name: 'FitSecret', description: `Order ${rz.receipt}`,
-      prefill: { name: order.name, contact: order.phone, email: order.email }, theme: { color: '#c6f432' },
+      key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID, order_id: rz.id, amount: rz.amount, currency: 'INR', name: 'Fit Secrets', description: `Order ${rz.receipt}`,
+      prefill: { name: order.name, contact: order.phone, email: order.email }, theme: { color: '#E9A91A' },
       modal: { ondismiss: () => resolve(false) },
       handler: async (res: Record<string, string>) => {
         const v = await fetch('/api/pay/verify', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...res, order_id: order.id }) });

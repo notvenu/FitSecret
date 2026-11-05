@@ -2,11 +2,12 @@ import Link from 'next/link';
 
 export default function NotFound() {
   return (
-    <div className="mx-auto max-w-xl px-4 py-28 text-center">
-      <p className="display text-9xl text-brand-deep">404</p>
-      <h1 className="mt-4 display text-3xl">This page skipped leg day</h1>
-      <p className="mt-2 text-mute">It doesn&apos;t exist, or the product is no longer listed.</p>
-      <Link href="/shop" className="btn-ink mt-8">Back to the shop</Link>
+    <div className="page-top mx-auto grid max-w-xl justify-items-center gap-6 px-4 pb-24 text-center">
+      <p className="display-xl text-haldi">404</p>
+      <h1 className="h2">This page isn&apos;t on the shelf.</h1>
+      <p className="text-ink-soft">It may have moved or sold out for good. Search for it, or start from a goal.</p>
+      <form action="/shop" className="flex w-full gap-2"><input name="q" className="field flex-1" placeholder="Search products" aria-label="Search products" /><button className="btn btn-dark">Search</button></form>
+      <Link href="/" className="font-semibold text-river underline underline-offset-4">Back to home</Link>
     </div>
   );
 }

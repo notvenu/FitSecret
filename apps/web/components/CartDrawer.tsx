@@ -1,108 +1,119 @@
 'use client';
 import Link from 'next/link';
-import { useEffect } from 'react';
-import { AnimatePresence, motion } from 'motion/react';
-import { X, Minus, Plus } from '@phosphor-icons/react';
-import { inr } from '@fitsecret/shared';
-import { useCart, MAX_QTY, type CartLine } from './cart';
-import ProductShot from './ProductShot';
+import { useEffect, useRef } from 'react';
+import { Minus, Plus, X, ShoppingBag, Truck } from 'lucide-react';
+import { useCart, type CartLine } from './cart';
+import { useT } from './Lang';
+import { Flower } from './Tree';
+import { inr0, waLink, WhatsApp } from './ui';
+import { GOALS } from '@/lib/goals';
 
 export function QtyStepper({ id, qty, max }: { id: string; qty: number; max: number }) {
   const { setQty } = useCart();
   return (
-    <div className="inline-flex items-center rounded-full border border-line">
-      <button className="grid h-8 w-8 place-items-center" onClick={() => setQty(id, qty - 1)} aria-label="Decrease quantity"><Minus size={14} /></button>
-      <span className="w-6 text-center text-sm tabular-nums">{qty}</span>
-      <button className="grid h-8 w-8 place-items-center disabled:opacity-30" disabled={qty >= Math.min(max, MAX_QTY)} onClick={() => setQty(id, qty + 1)} aria-label="Increase quantity"><Plus size={14} /></button>
-    </div>
-  );
-}
-
-// Line total at the price that applies for this quantity, with a note when bulk or the buyer's own rate kicked in.
-export function LinePrice({ l }: { l: CartLine }) {
-  const { priceOf, buyer } = useCart();
-  const p = priceOf(l, l.qty);
-  const why = p < l.price && (l.bulkPrice && l.bulkMin && l.qty >= l.bulkMin && p === l.bulkPrice ? 'Bulk price' : buyer ? 'Your rate' : null);
-  return (
-    <span className="text-right">
-      <span className="block font-semibold tabular-nums">{inr(p * l.qty)}</span>
-      {why && <span className="block text-[11px] text-brand-deep">{why} {inr(p)} each</span>}
+    <span className="inline-flex items-center rounded-full border border-line bg-paper">
+      <button type="button" onClick={() => setQty(id, qty - 1)} className="grid size-9 place-items-center" aria-label="Decrease quantity"><Minus size={14} /></button>
+      <span className="num w-7 text-center text-sm font-semibold" aria-live="polite">{qty}</span>
+      <button type="button" onClick={() => setQty(id, qty + 1)} disabled={qty >= max} className="grid size-9 place-items-center disabled:opacity-30" aria-label="Increase quantity"><Plus size={14} /></button>
     </span>
   );
 }
 
-export function ShipProgress({ subtotal }: { subtotal: number }) {
-  const FREE_SHIP = useCart().store.free_shipping_above;
-  const left = FREE_SHIP - subtotal;
+export function LinePrice({ l }: { l: CartLine }) {
+  const { priceOf } = useCart();
+  const unit = priceOf(l, l.qty);
   return (
-    <div className="text-sm">
-      {left > 0 ? <span>Add <b>{inr(left)}</b> more for free delivery</span> : <span><b>Free delivery</b> unlocked</span>}
-      <div className="mt-2 h-1 overflow-hidden rounded-full bg-surface-2">
-        <motion.div className="h-full rounded-full bg-brand" initial={false} animate={{ width: `${Math.min(100, (subtotal / FREE_SHIP) * 100)}%` }} transition={{ type: 'spring', stiffness: 120, damping: 20 }} />
+    <span className="num shrink-0 text-right text-sm font-semibold">
+      {inr0(unit * l.qty)}
+      {unit < l.price && <span className="block text-xs font-normal text-ink-soft line-through">{inr0(l.price * l.qty)}</span>}
+    </span>
+  );
+}
+
+// Free-delivery progress (owner sets the threshold in the POS). A vine grows toward a flower that blooms at 100%.
+export function ShipProgress({ subtotal }: { subtotal: number }) {
+  const { store } = useCart();
+  const t = useT();
+  const goal = store.free_shipping_above;
+  if (!goal || !store.shipping_fee) return null;
+  const pct = Math.min(100, (subtotal / goal) * 100);
+  return (
+    <div>
+      <p className="flex items-center gap-2 text-sm"><Truck size={16} className="text-river" />{pct >= 100 ? <b>{t('cart.free')}</b> : t('cart.away', { p: inr0(goal - subtotal) })}</p>
+      {/* A vine grows toward the flower; at 100% the flower blooms */}
+      <div className="mt-2 flex items-center gap-1">
+        <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-sage">
+          <div className="h-full rounded-full bg-leaf transition-[width] duration-700" style={{ width: `${pct}%`, transitionTimingFunction: 'cubic-bezier(.34,1.56,.64,1)' }} />
+        </div>
+        <span className={`transition-[transform,filter] duration-[400ms] ease-[var(--ease-stamp)] ${pct >= 100 ? 'scale-110 rotate-[30deg]' : 'scale-75 grayscale'}`}><Flower color="#FFB81F" size={24} /></span>
       </div>
     </div>
   );
 }
 
-export default function CartDrawer() {
-  const { lines, open, setOpen, subtotal, combo } = useCart();
-  useEffect(() => {
-    if (!open) return;
-    const k = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
-    addEventListener('keydown', k);
-    document.body.style.overflow = 'hidden';
-    return () => { removeEventListener('keydown', k); document.body.style.overflow = ''; };
-  }, [open, setOpen]);
+export function cartMessage(lines: CartLine[], total: number) {
+  return `Hi Fit Secrets, I'd like to order:\n${lines.map((l) => `• ${l.name}${l.variant ? ` (${l.variant})` : ''} × ${l.qty}`).join('\n')}\nTotal: ${inr0(total)}\nPincode: `;
+}
 
+// Mini-cart: right drawer on desktop, bottom sheet on mobile. Focus is trapped and returned on close.
+export default function CartDrawer({ phone }: { phone: string }) {
+  const { lines, open, setOpen, subtotal, combo } = useCart();
+  const t = useT();
+  const ref = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    const d = ref.current;
+    if (!d) return;
+    if (open && !d.open) d.showModal();
+    if (!open && d.open) d.close();
+  }, [open]);
+
+  const net = subtotal - combo.total;
   return (
-    <AnimatePresence>
-      {open && (
+    <dialog ref={ref} onClose={() => setOpen(false)} onClick={(e) => e.target === ref.current && setOpen(false)} aria-label={t('cart.title')}
+      className="fixed m-0 ml-auto mt-auto flex h-[88dvh] max-h-none w-full max-w-none flex-col rounded-t-[28px] bg-chalk p-0 text-ink shadow-lift backdrop:bg-deep/40 backdrop:backdrop-blur-[2px] not-open:hidden
+        open:animate-[sheet-up_320ms_var(--ease-out-expo)] md:mt-0 md:h-dvh md:max-w-md md:rounded-none md:rounded-l-[28px] md:open:animate-[sheet-left_320ms_var(--ease-out-expo)]">
+      <style>{`@keyframes sheet-up{from{transform:translateY(100%)}}@keyframes sheet-left{from{transform:translateX(100%)}}`}</style>
+      <header className="flex items-center justify-between border-b border-line px-5 py-4">
+        <h2 className="h3">{t('cart.title')}</h2>
+        <button type="button" onClick={() => setOpen(false)} className="grid size-11 place-items-center rounded-full hover:bg-sage" aria-label={t('nav.close')}><X size={20} /></button>
+      </header>
+
+      {!lines.length ? (
+        <div className="grid flex-1 content-center justify-items-center gap-6 px-6 text-center">
+          <ShoppingBag size={48} strokeWidth={1.25} className="text-mist" />
+          <p className="max-w-60 text-lg">{t('cart.empty')}</p>
+          <div className="flex flex-wrap justify-center gap-2">
+            {GOALS.map((g) => <Link key={g.slug} href={`/shop?goal=${g.slug}`} onClick={() => setOpen(false)} className="chip">{t(g.label)}</Link>)}
+          </div>
+        </div>
+      ) : (
         <>
-          <motion.div className="fixed inset-0 z-50 bg-ink/40" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setOpen(false)} />
-          <motion.aside role="dialog" aria-label="Basket" className="fixed inset-y-0 right-0 z-50 flex w-full max-w-md flex-col bg-white"
-            initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }} transition={{ type: 'spring', stiffness: 280, damping: 34 }}>
-            <div className="flex items-center justify-between border-b border-line px-5 py-4">
-              <h2 className="display text-3xl">Your basket</h2>
-              <button onClick={() => setOpen(false)} aria-label="Close cart" className="rounded-full p-2 hover:bg-surface"><X size={22} /></button>
+          <ul className="flex-1 divide-y divide-line overflow-y-auto px-5">
+            {lines.map((l) => (
+              <li key={l.id} className="flex gap-3 py-4 animate-[rise_320ms_var(--ease-out-expo)]">
+                <div className="min-w-0 flex-1">
+                  <Link href={`/p/${l.key}`} onClick={() => setOpen(false)} className="line-clamp-2 font-medium hover:underline">{l.name}</Link>
+                  {l.variant && <p className="text-sm text-ink-soft">{l.variant}</p>}
+                  <div className="mt-2 flex items-center gap-3">
+                    <QtyStepper id={l.id} qty={l.qty} max={Math.min(100, l.stock)} />
+                  </div>
+                </div>
+                <LinePrice l={l} />
+              </li>
+            ))}
+          </ul>
+          <footer className="space-y-4 border-t border-line px-5 pt-4 pb-safe">
+            <ShipProgress subtotal={net} />
+            {combo.applied.map((c) => <p key={c.id} className="flex justify-between text-sm text-river"><span>Combo: {c.name}</span><span className="num">−{inr0(c.saving)}</span></p>)}
+            <p className="flex justify-between text-lg font-semibold"><span>{t('cart.subtotal')}</span><span className="num">{inr0(net)}</span></p>
+            <div className="grid gap-2 pb-2">
+              <Link href="/checkout" onClick={() => setOpen(false)} className="btn btn-gold w-full">{t('cart.checkout')}</Link>
+              <a href={waLink(phone, cartMessage(lines, net))} target="_blank" rel="noreferrer" className="btn btn-ghost w-full"><WhatsApp size={18} />{t('cart.whatsapp')}</a>
             </div>
-            {!lines.length ? (
-              <div className="grid flex-1 place-items-center p-8 text-center">
-                <div>
-                  <p className="display text-4xl">Empty basket</p>
-                  <p className="mt-2 text-sm text-mute">Pick something off the shelves.</p>
-                  <Link href="/shop" onClick={() => setOpen(false)} className="btn-ink mt-6">Shop products</Link>
-                </div>
-              </div>
-            ) : (
-              <>
-                <div className="border-b border-line px-5 py-4"><ShipProgress subtotal={subtotal} /></div>
-                <ul className="flex-1 divide-y divide-line overflow-y-auto px-5">
-                  <AnimatePresence initial={false}>
-                    {lines.map((l) => (
-                      <motion.li key={l.id} layout exit={{ opacity: 0, x: 40 }} className="flex gap-4 py-4">
-                        <div className="h-24 w-20 shrink-0 overflow-hidden rounded-[10px] bg-surface"><ProductShot brand={l.brand} name={l.name} size={l.variant.split(' · ')[0]} /></div>
-                        <div className="min-w-0 flex-1">
-                          <Link href={`/p/${l.key}?v=${l.id}`} onClick={() => setOpen(false)} className="line-clamp-2 text-sm font-semibold hover:underline">{l.name}</Link>
-                          <div className="text-xs text-mute">{l.variant}</div>
-                          <div className="mt-3 flex items-center justify-between">
-                            <QtyStepper id={l.id} qty={l.qty} max={l.stock} />
-                            <LinePrice l={l} />
-                          </div>
-                        </div>
-                      </motion.li>
-                    ))}
-                  </AnimatePresence>
-                </ul>
-                <div className="border-t border-line p-5">
-                  {combo.applied.map((c) => <div key={c.id} className="mb-1 flex justify-between text-sm text-brand-deep"><span>Combo: {c.name}{c.sets > 1 ? ` ×${c.sets}` : ''}</span><span className="tabular-nums">−{inr(c.saving)}</span></div>)}
-                  <div className="mb-4 flex justify-between text-lg"><span>Subtotal</span><span className="font-bold tabular-nums">{inr(subtotal - combo.total)}</span></div>
-                  <Link href="/checkout" onClick={() => setOpen(false)} className="btn-ink w-full py-4 text-base">Checkout</Link>
-                </div>
-              </>
-            )}
-          </motion.aside>
+          </footer>
         </>
       )}
-    </AnimatePresence>
+    </dialog>
   );
 }

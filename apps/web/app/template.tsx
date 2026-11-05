@@ -1,12 +1,4 @@
-'use client';
-import { useEffect } from 'react';
-import { motion } from 'motion/react';
-
-// Re-mounts on every navigation: a short fade so pages don't snap in. Skipped on the first load so server HTML shows immediately.
-// Opacity only: a leftover transform would trap position:fixed children.
-let first = true;
+// Route change: content fades and rises 12px (320ms), effect #17. Reduced motion turns it into a plain fade (globals.css).
 export default function Template({ children }: { children: React.ReactNode }) {
-  const skip = first;
-  useEffect(() => { first = false; }, []);
-  return <motion.div initial={skip ? false : { opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.3, ease: 'easeOut' }}>{children}</motion.div>;
+  return <div className="animate-[rise_320ms_var(--ease-out-expo)]">{children}</div>;
 }

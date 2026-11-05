@@ -1,5 +1,5 @@
-// Supabase session for /admin (the Online Orders console). Staff sign in with their Supabase email + password; the
-// `staff` table must have a row for them (role 'orders' for console staff; the database functions check it).
+// Supabase session for /admin (the Online Store admin). Staff sign in with their Supabase email + password; the
+// `staff` table must have a row for them (role 'admin' for the owner; RLS checks it on every table).
 import { createClient } from '@supabase/supabase-js';
 
 export class UserError extends Error {
@@ -23,15 +23,16 @@ export async function loadMe() {
   if (me?.id === s.user.id) return me;
   const { data: row } = await sb.from('staff').select('name, role').eq('user_id', s.user.id).maybeSingle();
   if (!row) { await sb.auth.signOut(); return (me = null); }
-  // the console needs no POS permissions: orders and inbox only, whatever the role
-  return (me = { id: s.user.id, name: row.name || s.user.email, role: 'cashier', perms: { online: true }, email: s.user.email });
+  // staff role 'admin' (or 'owner') = the owner: every Online Store screen. Anyone else: orders, inbox, offers and customers.
+  const owner = ['admin', 'owner'].includes(row.role);
+  return (me = { id: s.user.id, name: row.name || s.user.email, role: owner ? 'admin' : 'cashier', perms: owner ? null : { online: true, offers: true, parties: true }, email: s.user.email });
 }
 
 export async function signIn(email, password) {
   if (!sb) throw new UserError('Supabase is not configured (NEXT_PUBLIC_SUPABASE_URL / _ANON_KEY in apps/web/.env.local).', 500);
   const { error } = await sb.auth.signInWithPassword({ email: email.trim(), password });
   if (error) throw new UserError(error.message);
-  if (!(await loadMe())) throw new UserError('This account is not a staff login. Add it to the staff table in Supabase (role orders).');
+  if (!(await loadMe())) throw new UserError('This account is not a staff login. Add it to the staff table in Supabase (role admin for the owner).');
 }
 
 export async function signOut() {

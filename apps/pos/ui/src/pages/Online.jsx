@@ -10,6 +10,7 @@ import { api, useApi, toast, fail, go, downloadCsv } from '../api.js';
 import { Btn, Field, Modal, Money, Table, Badge, Loading, DeleteBtn, SideNav, SectionPage, useForm, cx } from '../ui.jsx';
 import { Logo, Icon, SyncPill } from '../App.jsx';
 import { can } from '@fitsecret/shared/permissions';
+import { CLOUD } from '@backend';
 import Orders, { ORDER_C } from './Orders.jsx';
 import { catOptions } from './Items.jsx';
 
@@ -51,7 +52,8 @@ export default function OnlineMode({ boot, route, reload, sync }) {
   const saveStore = async (patch, msg = 'Saved') => {
     try { await api('/t/branches', { id: ob.id, settings: { ...ob.settings, store: { ...ob.settings?.store, ...patch } } }); toast(msg); reload(); } catch (e) { fail(e); }
   };
-  const exit = () => { localStorage.removeItem('fs_mode'); go('/'); };
+  // On the website (/admin) there is no POS to go back to: the button signs out instead.
+  const exit = () => (CLOUD ? api('/logout', {}).finally(reload) : (localStorage.removeItem('fs_mode'), go('/')));
   const props = { boot, admin, ob, store, saveStore, orders, inbox, reload, route };
 
   return (
@@ -79,14 +81,14 @@ export default function OnlineMode({ boot, route, reload, sync }) {
         <SyncPill s={sync} />
         <div className="space-y-1 p-2">
           {store.site_url && <a href={store.site_url} target="_blank" rel="noreferrer" className="flex items-center gap-3 rounded-xl px-3.5 py-2 text-sm hover:bg-ink-2"><Icon d={I.web} /> View website ↗</a>}
-          <button onClick={exit} className="w-full rounded-full bg-white/15 px-4 py-2 text-sm font-semibold hover:bg-white/25">Exit online mode</button>
+          <button onClick={exit} className="w-full rounded-full bg-white/15 px-4 py-2 text-sm font-semibold hover:bg-white/25">{CLOUD ? `Sign out (${boot.user.name})` : 'Exit online mode'}</button>
         </div>
       </aside>
       <main className="min-w-0 flex-1 overflow-y-auto">
         <header className="no-print flex items-center gap-3 border-b border-line bg-white px-5 py-2.5 text-sm">
           <Logo className="h-7" />
           <span className="text-black/50">Fulfilled from <b className="text-ink">{ob?.name}</b></span>
-          <Btn size="sm" className="ml-auto" onClick={() => api('/sync/now', {}).then(orders.reload, fail)}>↻ Fetch new orders</Btn>
+          <Btn size="sm" className="ml-auto" onClick={() => api('/sync/now', {}).then(() => { orders.reload(); inbox.reload(); }, fail)}>↻ Fetch new orders</Btn>
         </header>
         {{
           '': <Dashboard {...props} />, orders: <Orders boot={boot} list={orders} siteUrl={store.site_url} />, inbox: <Inbox {...props} />, products: <Products {...props} />, categories: <Categories />,

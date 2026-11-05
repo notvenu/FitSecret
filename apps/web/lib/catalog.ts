@@ -35,18 +35,21 @@ async function catMeta(): Promise<Map<string, { image: string | null; rank: numb
   return new Map(rows.map((c) => [c.slug, { image: c.image || seed.get(c.slug)?.image || null, rank: (c.sort ?? 999) * 1000 + (seed.get(c.slug)?.i ?? 999) }]));
 }
 
+// Demo mode: the real imported catalogue with nominal stock, so the site is browsable before Supabase is connected.
+function seedRows(): Row[] {
+  const cats = Object.fromEntries(SEED_CATEGORIES.map((c) => [c.id, c]));
+  return SEED_ITEMS.map((i) => {
+    const c = cats[i.category_id], parent = c.parent_id ? cats[c.parent_id] : null;
+    return { ...i, category_slug: c.slug, category_name: c.name, parent_slug: parent?.slug ?? null, parent_name: parent?.name ?? null, stock: 10 };
+  });
+}
+
 async function rows(): Promise<Row[]> {
-  if (!live) {
-    // Demo mode: the real imported catalogue with nominal stock, so the site is browsable before Supabase is connected.
-    const cats = Object.fromEntries(SEED_CATEGORIES.map((c) => [c.id, c]));
-    return SEED_ITEMS.map((i) => {
-      const c = cats[i.category_id], parent = c.parent_id ? cats[c.parent_id] : null;
-      return { ...i, category_slug: c.slug, category_name: c.name, parent_slug: parent?.slug ?? null, parent_name: parent?.name ?? null, stock: 10 };
-    });
-  }
+  if (!live) return seedRows();
   const sb = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!, { auth: { persistSession: false } });
   const { data, error } = await sb.from('shop_items').select('*').limit(5000);
-  if (error) throw new Error('Catalogue unavailable: ' + error.message);
+  // Database unreachable (wrong URL, paused or deleted project): keep the site up on the built-in catalogue instead of crashing every page.
+  if (error) { console.warn('Supabase catalogue unavailable, showing the built-in catalogue:', error.message); return seedRows(); }
   return data as Row[];
 }
 

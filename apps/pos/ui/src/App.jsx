@@ -25,8 +25,7 @@ import FollowUps from './pages/FollowUps.jsx';
 import Insights from './pages/Insights.jsx';
 import Locations from './pages/Locations.jsx';
 import { t } from './i18n.js';
-import OnlineMode, { OrderPrint, OfferLabels, Offers, Inbox } from './pages/Online.jsx';
-import Orders from './pages/Orders.jsx';
+import OnlineMode, { OrderPrint, OfferLabels, Offers } from './pages/Online.jsx';
 
 // Same menu, names and order as Vyapar desktop so staff can switch without retraining.
 // Leaf: [label, list href, '+' href]; a leaf with only a label is a heading. Who sees it: allowed() below
@@ -148,7 +147,8 @@ export default function App() {
     <>
       <Toasts />
       {boot.setup ? <Setup onDone={load} /> : !boot.user ? (CloudLogin ? <CloudLogin boot={boot} onDone={load} /> : <Login boot={boot} onDone={load} />)
-        : CLOUD ? <OrdersConsole boot={boot} route={route} reload={load} /> : <Shell boot={boot} route={route} reload={load} />}
+        : CLOUD ? <OnlineMode boot={boot} reload={load} sync={boot.sync} route={{ ...route, parts: ['online', ...route.parts.filter((p) => p !== 'online')] }} />
+        : <Shell boot={boot} route={route} reload={load} />}
     </>
   );
 }
@@ -298,30 +298,6 @@ function MenuEntry({ m, isHere, open, holdsCurrent, onToggle }) {
 }
 
 // The website's /admin: the Online Orders console. Website orders and the inbox, nothing else (see apps/web/admin).
-function OrdersConsole({ boot, route, reload }) {
-  const orders = useApi('/orders'), inbox = useApi('/t/feedback');
-  useEffect(() => { const t = setInterval(() => { orders.reload(); inbox.reload(); }, 20000); return () => clearInterval(t); }, []);
-  const tab = route.parts[0] === 'inbox' ? 'inbox' : 'orders';
-  const fresh = orders.data?.filter((o) => o.status === 'placed').length || 0, unread = inbox.data?.filter((f) => f.status === 'new').length || 0;
-  const signOut = () => api('/logout', {}).finally(reload);
-  return (
-    <div className="min-h-screen">
-      <header className="no-print flex flex-wrap items-center gap-3 border-b border-line bg-white px-4 py-2.5">
-        <Logo className="h-7" /><span className="display text-lg">Online orders</span>
-        <nav className="ml-4 flex gap-1" aria-label="Console">
-          {[['orders', 'Orders', fresh], ['inbox', 'Inbox', unread]].map(([k, l, n]) => (
-            <a key={k} href={'#/' + (k === 'orders' ? '' : k)} aria-current={tab === k ? 'page' : undefined}
-              className={cx('rounded-full px-4 py-1.5 text-sm font-semibold', tab === k ? 'bg-ink text-white' : 'hover:bg-black/5')}>{l}{n > 0 && <span className="ml-1.5 rounded-full bg-red-500 px-1.5 text-xs text-white">{n}</span>}</a>
-          ))}
-        </nav>
-        <span className="ml-auto text-sm text-black/55">{boot.user.name}</span>
-        <button onClick={signOut} className="rounded-full border border-line px-3 py-1 text-xs font-semibold hover:border-ink">Sign out</button>
-      </header>
-      {tab === 'orders' ? <Orders boot={boot} list={orders} siteUrl={boot.branch.settings.store.site_url} /> : <Inbox inbox={inbox} store={boot.branch.settings.store} />}
-    </div>
-  );
-}
-
 // Ctrl+F: jump to any screen, party or item by typing.
 function OpenAnything({ menu, onClose }) {
   const [q, setQ] = useState('');

@@ -36,6 +36,14 @@
     "./store": {
       "types": "./store.d.ts",
       "default": "./store.js"
+    },
+    "./finder": {
+      "types": "./finder.d.ts",
+      "default": "./finder.js"
+    },
+    "./product-info": {
+      "types": "./product-info.d.ts",
+      "default": "./product-info.js"
     }
   }
 }

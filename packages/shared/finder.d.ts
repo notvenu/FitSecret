@@ -1,0 +1,12 @@
+export type FinderProduct = { key: string; name: string; description?: string; categorySlug: string; subSlug?: string; goals: string[]; price: number; stock: number; featured?: boolean; at?: Attributes };
+export type Attributes = { kind: 'food' | 'beauty' | 'ayurveda' | 'supplement'; booster: boolean; form: 'topical' | 'food' | 'capsule' | 'drink' | 'powder' | 'other'; diet: 'nonveg' | 'vegan' | 'veg';
+  allergens: string[]; vegLabel: boolean; needs_consult: boolean; min_age: number; experience: 'starter' | 'intermediate' | 'advanced'; anchorFor: string[]; beginner_friendly: boolean };
+export type Answers = { goals: string[]; experience?: 'new' | 'some' | 'regular' | null; diet?: 'veg' | 'vegan' | 'egg' | null; allergens?: string[];
+  form?: 'powder' | 'capsule' | 'drink' | 'food' | null; budget?: 'u500' | 'u1000' | 'u2000' | null; consult?: boolean; minor?: boolean };
+export type Chip = { k: 'goal'; g: string } | { k: 'beginner' | 'vegan' | 'veg' | 'budget' | 'food' } | { k: 'form'; form: string };
+export type Pick = { key: string; why: Chip[] };
+export const FOOD_CATS: string[];
+export const BOOSTER_CATS: string[];
+export function attributesOf(p: Omit<FinderProduct, 'goals' | 'price' | 'stock'>): Attributes;
+export function recommend(products: FinderProduct[], a: Answers): { anchor: Pick | null; supporters: Pick[]; optional: Pick[] };
+export function goalsFromText(s: string): string[];

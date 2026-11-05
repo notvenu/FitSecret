@@ -51,7 +51,7 @@ export default function Terms() {
         </>],
         ['Changes and governing law', <>
           <p>We may update these terms; the version shown when you order applies to that order. These terms are governed by the laws of India, and courts at Vijayawada, Andhra Pradesh have jurisdiction.</p>
-          <p>Questions or complaints? <Link href="/contact">Contact us</Link> and we will respond within 48 hours. See also our <Link href="/privacy">Privacy Policy</Link>.</p>
+          <p>Questions or complaints? <Link href="/visit">Contact us</Link> and we will respond within 48 hours. See also our <Link href="/privacy">Privacy Policy</Link>.</p>
         </>],
       ]}
     />

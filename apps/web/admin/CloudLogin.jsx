@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { signIn } from './session.js';
 
-// Sign-in for the Online Orders console (website /admin). Supabase email + password of a staff login.
+// Sign-in for the Online Store admin (website /admin). Supabase email + password of a staff login.
 export default function CloudLogin({ onDone }) {
   const [f, setF] = useState({ email: '', password: '' });
   const [err, setErr] = useState('');
@@ -14,8 +14,8 @@ export default function CloudLogin({ onDone }) {
   return (
     <div className="grid min-h-screen place-items-center bg-paper p-4">
       <form onSubmit={submit} className="rise w-full max-w-sm rounded-[14px] border border-black/10 bg-white p-6 shadow-sm">
-        <div className="display text-2xl">Online orders</div>
-        <p className="mb-5 text-sm text-black/55">Sign in to handle website orders and messages.</p>
+        <div className="display text-2xl">Online Store admin</div>
+        <p className="mb-5 text-sm text-black/55">Orders, products, offers and store settings for the website.</p>
         <label className="mb-3 block"><span className="mb-1 block text-xs font-medium text-black/60">Email</span>
           <input className="input" type="email" autoComplete="username" required autoFocus value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} /></label>
         <label className="mb-4 block"><span className="mb-1 block text-xs font-medium text-black/60">Password</span>

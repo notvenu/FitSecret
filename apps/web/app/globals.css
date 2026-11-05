@@ -1,250 +1,201 @@
 @import "tailwindcss";
 
-/* Fit Secrets: white page, charcoal ink, logo green.
-   Brand colours come from the logo. Change --color-brand / --color-ink here.
-   Shape rule: buttons are pills, cards/images 14px, inputs 10px. */
+/* DESIGN v3 "Tree of Life" §2. The old role names (river, haldi, chalk…) are kept and remapped so every page
+   picks up the new palette; the v3 names (indigo, coral, lime…) are added for new work. */
 @theme {
-  /* Clash Display headings + Satoshi body (both Indian Type Foundry / Fontshare, Satoshi matches fitsecretsstore.com) */
-  --font-sans: var(--font-satoshi), system-ui, sans-serif;
-  --font-display: var(--font-clash), var(--font-satoshi), sans-serif;
-  --color-bg: #ffffff;
-  --color-ink: #1e2a2d;
-  --color-ink-soft: #3a4649;
-  --color-mute: #5f6b6e;
-  --color-line: #e4e8e8;
-  --color-surface: #f3f5f5;
-  --color-surface-2: #e9eded;
-  --color-brand: #7cd62c;
-  --color-brand-deep: #3d7a10; /* green for small text on white (AA contrast) */
-  --color-danger: #c2410c;
-  --radius-card: 14px;
-  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --color-river: #17237A;      /* = indigo */
+  --color-deep: #0F1537;       /* = ink */
+  --color-haldi: #FFB81F;      /* = marigold */
+  --color-haldi-light: #FFD36B;
+  --color-madder: #E5483B;     /* = coral */
+  --color-chalk: #EEF3FF;      /* = sky */
+  --color-paper: #FFFFFF;
+  --color-ink: #0F1537;
+  --color-ink-soft: #5A6290;   /* = v3 mist (secondary text) */
+  --color-mist: #B8C0EA;       /* light secondary text on indigo */
+  --color-sage: #E6F8C2;       /* lime tint for info panels */
+  --color-line: #D6DEF5;
+
+  --color-sky: #EEF3FF;
+  --color-indigo: #17237A;
+  --color-coral: #E5483B;
+  --color-lime: #C9F26B;
+  --color-leaf: #2E9E5B;
+  --color-marigold: #FFB81F;
+
+
+  --font-display: var(--font-syne), var(--font-telugu), system-ui, sans-serif;
+  --font-sans: var(--font-hanken), var(--font-telugu), system-ui, sans-serif;
+  --font-serif: var(--font-hanken), var(--font-telugu), system-ui, sans-serif;
+
+  --radius-control: 14px;
+  --radius-tile: 24px;
+  --radius-sheet: 28px;
+
+  --shadow-rest: 4px 4px 0 rgb(23 35 122 / .12);
+  --shadow-lift: 6px 6px 0 rgb(23 35 122 / .18);
+  --shadow-stamp: 6px 6px 0 rgb(23 35 122 / .18);
+
+  --ease-out-expo: cubic-bezier(.22, 1, .36, 1); /* = ease-grow */
+  --ease-grow: cubic-bezier(.22, 1, .36, 1);
+  --ease-stamp: cubic-bezier(.34, 1.56, .64, 1);
+  --ease-in-out: cubic-bezier(.65, 0, .35, 1);  /* = ease-ink */
 }
 
-@layer base {
-  html { color-scheme: light; scrollbar-gutter: stable; }
-  html, body { overflow-x: clip; } /* the tilted marquee band must not widen the page */
-  body { @apply bg-bg font-sans text-ink antialiased; }
-  ::selection { @apply bg-brand text-ink; }
-  :focus-visible { @apply outline-2 outline-offset-2 outline-ink; }
+:root {
+  --dur-instant: 100ms;
+  --dur-fast: 200ms;
+  --dur-base: 350ms;
+  --dur-slow: 700ms;
+  color-scheme: light;
+  /* Goal flower colours (§2), read at runtime as var(--color-goal-<slug>) so they live outside @theme */
+  --color-goal-build: #FFB81F; --color-goal-lose: #E5483B; --color-goal-energy: #FF7FA8;
+  --color-goal-immunity: #2E9E5B; --color-goal-digestion: #8FD3C4; --color-goal-hair: #C9F26B;
 }
 
-@utility display {
-  font-family: var(--font-display);
-  font-weight: 600;
-  letter-spacing: -0.02em;
-  word-spacing: 0.08em; /* Clash's word space is narrow; tight tracking would otherwise merge words */
-  line-height: 0.98;
-  text-wrap: balance;
+html { -webkit-text-size-adjust: 100%; scroll-padding-top: 88px; }
+body {
+  background: var(--color-sky);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
 }
-@utility field {
-  @apply w-full rounded-[10px] border border-line bg-white px-4 py-3 text-ink transition-colors placeholder:text-mute focus:border-ink focus:outline-none;
-}
-@utility btn {
-  @apply inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-full px-6 py-3 text-sm font-semibold transition-[transform,background-color,color,border-color,box-shadow] duration-200 active:scale-[0.97] disabled:pointer-events-none disabled:opacity-40;
-}
-@utility btn-ink { @apply btn bg-ink text-white hover:bg-black; }
-@utility btn-brand { @apply btn bg-brand text-ink hover:bg-ink hover:text-white; }
-@utility btn-line { @apply btn border border-ink/20 text-ink hover:border-ink; }
+@media (min-width: 768px) { body { font-size: 17px; } }
+:lang(te) body, [lang="te"] { line-height: 1.7; }
 
-/* Hero entrance: CSS only, staggered via inline animation-delay. */
-@keyframes hero-in { from { opacity: 0; transform: translateY(18px); } }
-.hero-in { animation: hero-in 0.8s var(--ease-out-expo) both; }
-/* Headline lines slide up from behind an overflow-hidden mask */
-@keyframes line-in { from { transform: translateY(105%); } }
-.line-in { animation: line-in 0.9s var(--ease-out-expo) both; }
+h1, h2, h3, .display { font-family: var(--font-display); font-weight: 800; letter-spacing: -0.02em; text-wrap: balance; }
+.display-xl { font-size: clamp(2.5rem, 1rem + 5.2vw, 6.25rem); line-height: .95; }
+.display-l  { font-size: clamp(2rem, 1.3rem + 3.6vw, 4.75rem); line-height: 1; }
+.h2         { font-size: clamp(1.5rem, 1.1rem + 2vw, 2.75rem); line-height: 1.05; }
+.h3         { font-size: clamp(1.1875rem, 1.1rem + .4vw, 1.625rem); line-height: 1.15; }
+:lang(te) :is(.display-xl, .display-l, .h2, .h3) { line-height: 1.3; letter-spacing: 0; }
+.story { font-size: clamp(1.0625rem, 1rem + .3vw, 1.1875rem); line-height: 1.6; max-width: 60ch; }
+.num { font-variant-numeric: tabular-nums; }
 
-/* Brand marquees: pure CSS, the track holds the list twice and slides by half its width. */
+/* Focus: 3px indigo ring, 2px paper offset (§11) */
+:focus-visible { outline: 3px solid var(--color-indigo); outline-offset: 2px; box-shadow: 0 0 0 2px var(--color-paper); border-radius: 6px; }
+
+/* Stamp (effect #3/#4): scale 1.08 → 1, ±2° rotation, coloured misregistration shadow snapping into place */
+@keyframes stamp-in {
+  from { opacity: 0; transform: scale(1.08) rotate(var(--r, -2deg)); text-shadow: 4px 4px 0 var(--mis, var(--color-lime)); }
+  to   { opacity: 1; transform: none; text-shadow: 0 0 0 transparent; }
+}
+.stamp-in > span { display: inline-block; animation: stamp-in var(--dur-base) var(--ease-stamp) both; }
+.stamp-in > span:nth-child(even) { --r: 2deg; }
+@keyframes rise { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+.rise { animation: rise var(--dur-slow) var(--ease-grow) both; }
+
+@layer components {
+/* Buttons: jelly press (effect #8). Primary = indigo/white, secondary = lime/indigo. */
+.btn {
+  position: relative; display: inline-flex; align-items: center; justify-content: center; gap: .5rem;
+  min-height: 48px; padding: .75rem 1.5rem; border-radius: 999px;
+  font-weight: 700; line-height: 1.2; white-space: nowrap;
+  transition: transform var(--dur-base) var(--ease-stamp), background-color var(--dur-fast), color var(--dur-fast), opacity var(--dur-fast);
+  -webkit-tap-highlight-color: transparent;
+}
+.btn:active { transform: scale(1.06, .92); transition-duration: var(--dur-instant); }
+.btn:disabled { opacity: .5; pointer-events: none; }
+.btn-gold { background: var(--color-indigo); color: var(--color-paper); }           /* primary */
+.btn-gold:hover { background: #22309A; }
+.btn-dark { background: var(--color-lime); color: var(--color-indigo); }            /* secondary */
+.btn-dark:hover { background: #B8E852; }
+.btn-ghost { border: 2px solid currentColor; }
+.btn-ghost:hover { background: rgb(23 35 122 / .06); }
+
+/* Inputs: 2px indigo border; a green vine draws along the bottom on focus (effect #16) */
+.field {
+  width: 100%; min-height: 48px; padding: .75rem 1rem; border-radius: var(--radius-control);
+  background: var(--color-paper) linear-gradient(var(--color-leaf), var(--color-leaf)) no-repeat left bottom / 0 3px;
+  border: 2px solid var(--color-indigo); color: var(--color-ink);
+  transition: background-size var(--dur-base) var(--ease-grow), border-color var(--dur-fast);
+}
+.field:focus { outline: none; background-size: 100% 3px; }
+.field:user-invalid { border-color: var(--color-coral); }
+select.field { appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%2317237A' stroke-width='2' fill='none'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-size: auto; background-position: right 1rem center; padding-right: 2.5rem; }
+
+.chip {
+  display: inline-flex; align-items: center; gap: .375rem; min-height: 44px; padding: .4rem 1rem; border-radius: 999px;
+  border: 2px solid var(--color-indigo); background: var(--color-paper); color: var(--color-indigo); font-size: .875rem; font-weight: 600;
+  transition: background var(--dur-fast), transform var(--dur-base) var(--ease-stamp);
+}
+.chip:hover { background: var(--color-sky); }
+.chip[aria-current="true"], .chip[aria-pressed="true"] { background: var(--color-lime); transform: scale(1.04); }
+
+/* Sticker (product tiles, panels): 2px indigo stroke + hard offset print shadow */
+.sticker { border: 2px solid var(--color-indigo); box-shadow: var(--shadow-stamp); }
+}
+
+/* Kept so older markup keeps its stacking context; v3 has no grain overlay on large areas. */
+.grain { position: relative; }
+
+/* Paisley-and-leaf repeat at 3% on colour blocks (§4.3) */
+.paisley { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='80' viewBox='0 0 80 80'%3E%3Cg fill='none' stroke='%23000' stroke-width='2' opacity='.05'%3E%3Cpath d='M20 50c-8-6-6-22 8-24 12-2 16 14 6 20-6 4-10-2-6-6'/%3E%3Cpath d='M58 22c6 4 10 12 4 18M62 18c-2 10-12 14-12 14'/%3E%3C/g%3E%3C/svg%3E"); }
+
+/* Marigold garland marquee (effect #15) */
+.marquee { display: flex; width: max-content; animation: marquee 60s linear infinite; }
+.marquee:hover { animation-play-state: paused; }
 @keyframes marquee { to { transform: translateX(-50%); } }
-.marquee { animation: marquee var(--dur, 50s) linear infinite; }
-.marquee.reverse { animation-direction: reverse; }
 
+/* Leaf shimmer skeleton (effect #12) */
+.skeleton { background: linear-gradient(90deg, var(--color-sage) 0%, #F3FCE0 50%, var(--color-sage) 100%) 0 0 / 200% 100%; animation: shimmer 1.4s linear infinite; }
+@keyframes shimmer { to { background-position: -200% 0; } }
 
-/* Heartbeat line from the logo, used as the brand divider / loader. */
-@keyframes pulse-draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
-.pulse-line path { stroke-dasharray: 1; stroke-dashoffset: 1; animation: pulse-draw 1.4s var(--ease-out-expo) forwards; }
+/* Pot grows when a seed lands */
+@keyframes bump { 40% { transform: scale(1.25) rotate(-6deg); } }
+.bump { animation: bump 400ms var(--ease-stamp); }
+
+@keyframes pulse-dot { 0% { box-shadow: 0 0 0 0 rgb(201 242 107 / .9); } 100% { box-shadow: 0 0 0 12px rgb(201 242 107 / 0); } }
+.pulse-dot { animation: pulse-dot 1.6s ease-out infinite; }
+
+/* Success stamp (verify, order placed, wholesale sent) */
+@keyframes stamp { 0% { transform: scale(1.6) rotate(-12deg); opacity: 0; } 60% { transform: scale(.94) rotate(2deg); opacity: 1; } 100% { transform: none; } }
+.stamp { animation: stamp 600ms var(--ease-stamp) both; }
+
+/* Tree of Life (effect #1): draw → stamp leaves → bloom flowers → idle sway */
+@keyframes draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+@keyframes pop { from { transform: scale(0) rotate(-20deg); } to { transform: none; } }
+@keyframes sway { 50% { transform: rotate(2.5deg); } }
+@keyframes drop { from { transform: translateY(-420px); } 80% { transform: translateY(6px); } to { transform: none; } }
+.tree-draw { stroke-dasharray: 1; animation: draw var(--dur-slow) var(--ease-grow) both; }
+.tree-pop { transform-box: fill-box; transform-origin: center; animation: pop var(--dur-base) var(--ease-stamp) both; }
+.tree-sway { transform-box: view-box; transform-origin: 50% 92%; animation: sway 7s ease-in-out 2.4s infinite; }
+.tree-seed { animation: drop 500ms var(--ease-grow) both; }
+/* Same session: the fast 600ms version (§5) */
+:root[data-seen] .tree-draw, :root[data-seen] .tree-pop, :root[data-seen] .tree-seed { animation-duration: 300ms; animation-delay: 0s !important; }
+
+/* Vine scroll progress (effect #9): native scroll-driven animation, no JS. Browsers without it show a full vine. */
+.vine-progress path { stroke-dasharray: 1; }
+@supports (animation-timeline: scroll()) {
+  .vine-progress path { animation: draw linear both; animation-timeline: scroll(root); }
+}
+
+/* Accordions via <details> */
+details > summary { list-style: none; cursor: pointer; }
+details > summary::-webkit-details-marker { display: none; }
+details[open] .chev { transform: rotate(180deg); }
+details::details-content { block-size: 0; overflow: clip; transition: block-size var(--dur-base) var(--ease-grow), content-visibility var(--dur-base) allow-discrete; }
+details[open]::details-content { block-size: auto; }
+:root { interpolate-size: allow-keywords; }
+
+.page-top { padding-top: calc(var(--nav-h, 72px) + 2.5rem); }
+
+/* Product page tab rail: sits right under the header (64px on phones, --nav-h from md), at the top when the header hides */
+.tab-rail { top: calc(var(--nav-h, 72px) - 8px); transition: top var(--dur-base) var(--ease-grow); }
+@media (min-width: 768px) { .tab-rail { top: var(--nav-h, 72px); } }
+:root[data-nav="hidden"] .tab-rail { top: 0; }
 
 .no-scrollbar { scrollbar-width: none; }
 .no-scrollbar::-webkit-scrollbar { display: none; }
+.pb-safe { padding-bottom: max(.5rem, env(safe-area-inset-bottom)); }
 
-/* Nav links: underline grows from the left */
-.nav-link { position: relative; }
-.nav-link::after { content: ''; position: absolute; left: 0; right: 0; bottom: -4px; height: 2px; background: var(--color-brand); transform: scaleX(0); transform-origin: left; transition: transform 220ms var(--ease-out-expo); }
-.nav-link:hover::after, .nav-link:focus-visible::after { transform: scaleX(1); }
-
-/* Cards lift on real hover only (touch fires false hovers) */
-@media (hover: hover) and (pointer: fine) {
-  .lift { transition: transform 300ms var(--ease-out-expo), box-shadow 300ms var(--ease-out-expo); }
-  .lift:hover { transform: translateY(-4px); box-shadow: 0 24px 50px -28px rgba(30, 42, 45, 0.45); }
-}
-
-/* Shop shelf unit: pegboard back, dark uprights, white shelves with a dark price strip, shelf-edge labels. */
-.shelf-unit {
-  position: relative;
-  border: 10px solid var(--color-ink); border-bottom: 0; border-radius: 8px 8px 0 0;
-  background-color: #eef1f1;
-  background-image: radial-gradient(rgba(30, 42, 45, 0.14) 1.3px, transparent 1.8px);
-  background-size: 18px 18px;
-  box-shadow: inset 0 18px 24px -18px rgba(30, 42, 45, 0.35); /* light falls off under the top rail */
-}
-.shelf-plinth { height: 14px; background: var(--color-ink); border-radius: 0 0 6px 6px; }
-.shelf-slot { display: flex; flex-direction: column; }
-.shelf-space { position: relative; display: flex; height: var(--tier); align-items: flex-end; justify-content: center; padding: 22px 10px 0; }
-.shelf-pack { position: relative; transform-origin: 50% 100%; transition: transform 380ms var(--ease-out-expo); }
-.shelf-cut { max-height: 100%; max-width: 100%; object-fit: contain; filter: drop-shadow(0 6px 5px rgba(30, 42, 45, 0.22)); }
-.shelf-box { display: block; height: 88%; aspect-ratio: 4 / 5; max-width: 100%; overflow: hidden; border-radius: 6px; box-shadow: 0 6px 10px -4px rgba(30, 42, 45, 0.3); }
-.shelf-empty .shelf-pack { opacity: 0.3; filter: grayscale(1); }
-.shelf-shadow {
-  position: absolute; left: 18%; right: 18%; bottom: -3px; height: 8px; border-radius: 50%;
-  background: radial-gradient(closest-side, rgba(30, 42, 45, 0.4), transparent);
-  transition: transform 380ms var(--ease-out-expo), opacity 380ms var(--ease-out-expo);
-}
-.shelf-chip {
-  position: absolute; top: 2px; left: 50%; z-index: 2; max-width: calc(100% - 8px); translate: -50% 0;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  border-radius: 999px; background: var(--color-ink); padding: 3px 9px; font-size: 11px; font-weight: 600; color: #fff;
-  opacity: 0; transform: translateY(6px); transition: opacity 180ms ease, transform 280ms var(--ease-out-expo); pointer-events: none;
-}
-.shelf-board { height: 9px; background: linear-gradient(#ffffff, #dfe4e4); }
-.shelf-lip { background: var(--color-ink-soft); padding: 5px 4px 6px; box-shadow: 0 10px 14px -10px rgba(30, 42, 45, 0.7); }
-.shelf-label { border-radius: 3px; background: #fff; padding: 4px 6px 4px; border-top: 3px solid var(--color-brand); }
-.shelf-slot:focus-within .shelf-pack { transform: translateY(-8px) scale(1.04); }
-.shelf-slot:focus-within .shelf-shadow { transform: scaleX(0.7); opacity: 0.4; }
-.shelf-slot:focus-within .shelf-chip { opacity: 1; transform: none; }
-@media (hover: hover) and (pointer: fine) {
-  .shelf-slot:hover .shelf-pack { transform: translateY(-8px) scale(1.04); }
-  .shelf-slot:hover .shelf-shadow { transform: scaleX(0.7); opacity: 0.4; }
-  .shelf-slot:hover .shelf-chip { opacity: 1; transform: none; }
-}
-
-/* Aisle walk: packs drop onto the shelf one after another when their aisle opens */
-.rack-in { transition: opacity 300ms ease, transform 550ms var(--ease-out-expo); transition-delay: calc(var(--i, 0) * 45ms + 120ms); }
-.aisle:not([data-on]) .rack-in { opacity: 0; transform: translateY(-28px); transition-delay: 0ms; }
-
+/* Reduced motion: static illustrations, 150ms fades, no loops (§7 guardrails) */
 @media (prefers-reduced-motion: reduce) {
-  .aisle:not([data-on]) .rack-in { transform: none; }
-  .shelf-slot:hover .shelf-pack, .shelf-slot:focus-within .shelf-pack, .shelf-chip { transform: none !important; }
-  .pulse-line path { animation: none; stroke-dashoffset: 0; }
-  .marquee, .hero-in, .line-in { animation: none; }
-  .lift:hover { transform: none; }
+  *, *::before, *::after { animation-duration: 150ms !important; animation-delay: 0s !important; animation-iteration-count: 1 !important; transition-duration: 150ms !important; scroll-behavior: auto !important; }
+  .marquee, .skeleton, .pulse-dot, .tree-sway, .vine-progress path { animation: none !important; }
+  .vine-progress { display: none; }
+  .tree-draw, .tree-pop, .tree-seed, .stamp-in > span, .rise { animation-name: fade !important; }
 }
-
-/* ---------- Shop front (Hero) ---------- */
-.signboard { position: relative; border-radius: 10px 10px 4px 4px; background: linear-gradient(#263336, var(--color-ink)); box-shadow: inset 0 -6px 0 rgba(0,0,0,.25), 0 18px 30px -22px rgba(30,42,45,.8); }
-.sign-lit { color: #fff; text-shadow: 0 0 18px rgba(124,214,44,.45), 0 0 2px rgba(255,255,255,.8); animation: sign-on 1.4s steps(1) .3s both; }
-@keyframes sign-on { 0% { opacity: .25; } 12% { opacity: 1; } 18% { opacity: .35; } 26%, 100% { opacity: 1; } }
-/* striped canopy with a scalloped edge */
-.awning { height: 46px; margin-top: 10px; margin-bottom: 14px; border-radius: 4px 4px 0 0;
-  background: repeating-linear-gradient(90deg, var(--color-brand) 0 44px, #fff 44px 88px);
-  box-shadow: inset 0 10px 14px -8px rgba(0,0,0,.25);
-  -webkit-mask: radial-gradient(22px 12px at 22px 100%, transparent 98%, #000) 0 0 / 44px 100% repeat-x;
-          mask: radial-gradient(22px 12px at 22px 100%, transparent 98%, #000) 0 0 / 44px 100% repeat-x; }
-@media (min-width: 768px) { .awning { height: 58px; } }
-/* display window: dark frame, lit interior, glass glare */
-.shop-window { overflow: hidden; border: 10px solid var(--color-ink); border-radius: 8px;
-  background: radial-gradient(120% 80% at 50% 0%, #ffffff 0%, #f1f5ee 55%, #e3ebdc 100%); box-shadow: inset 0 0 40px rgba(30,42,45,.12); }
-.window-riser { height: var(--h); border-bottom: 10px solid #fff; box-shadow: 0 10px 0 -2px #dfe5dd, 0 18px 18px -12px rgba(30,42,45,.35); }
-.window-pack { display: block; height: 100%; max-width: 22%; filter: drop-shadow(0 8px 6px rgba(30,42,45,.25));
-  transform-origin: 50% 100%; transition: transform 380ms var(--ease-out-expo); animation: hero-in .8s var(--ease-out-expo) both; }
-.window-pack:hover, .window-pack:focus-visible { transform: translateY(-6px) scale(1.05); }
-.window-glare { position: absolute; inset: 0; pointer-events: none; z-index: 20;
-  background: linear-gradient(115deg, transparent 30%, rgba(255,255,255,.55) 38%, transparent 46%, transparent 62%, rgba(255,255,255,.3) 66%, transparent 70%); }
-.open-sign { position: relative; margin-top: 18px; display: inline-flex; align-items: center; gap: 8px; border: 3px solid var(--color-ink); border-radius: 8px;
-  background: #fff; padding: 6px 16px; font-family: var(--font-display); font-weight: 700; font-size: 1.4rem; letter-spacing: .12em; color: var(--color-ink);
-  transform-origin: 50% -18px; animation: sign-swing 3.2s ease-in-out .2s infinite; }
-.open-sign::before { content: ''; position: absolute; left: 50%; top: -20px; width: 34px; height: 20px; translate: -50% 0;
-  border: 2px solid var(--color-ink); border-bottom: 0; border-radius: 17px 17px 0 0; }
-@keyframes sign-swing { 0%, 100% { rotate: -3deg; } 50% { rotate: 3deg; } }
-.open-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--color-brand); box-shadow: 0 0 10px var(--color-brand); animation: open-blink 1.6s ease-in-out infinite; }
-@keyframes open-blink { 50% { opacity: .35; } }
-.shop-step { position: relative; height: 18px; background: linear-gradient(#d9dfdf, #c8d0d0); border-radius: 0 0 6px 6px; }
-.doormat { position: absolute; right: 8%; top: 3px; width: min(30%, 220px); border-radius: 3px; background: var(--color-ink-soft); color: var(--color-brand);
-  text-align: center; font-size: 9px; font-weight: 800; letter-spacing: .4em; text-transform: uppercase; line-height: 12px; }
-@media (max-width: 767px) { .doormat { right: 50%; translate: 50% 0; width: 50%; } }
-.directory { overflow: hidden; border-radius: 8px; border: 6px solid var(--color-ink); background: rgba(255,255,255,.12); }
-
-/* ---------- Store entrance (ShopEntry), once per visit ---------- */
-.shop-entry { position: fixed; inset: 0; z-index: 100; pointer-events: none; animation: entry-gone 0s linear 2.3s forwards; }
-html[data-in] .shop-entry { display: none; }
-@keyframes entry-gone { to { visibility: hidden; } }
-
-/* ---------- Offers board ---------- */
-.notice-board { border: 10px solid var(--color-ink); border-radius: 10px; background-color: #eef1f1;
-  background-image: radial-gradient(rgba(30,42,45,.14) 1.3px, transparent 1.8px); background-size: 18px 18px; }
-.poster { position: relative; display: block; border-radius: 8px; background: #fff; padding: 10px; rotate: var(--tilt, 0deg);
-  box-shadow: 0 18px 30px -20px rgba(30,42,45,.6); transition: rotate 400ms var(--ease-out-expo), transform 400ms var(--ease-out-expo); }
-.poster:hover, .poster:focus-visible { rotate: 0deg; transform: translateY(-4px); }
-.tape { position: absolute; left: 50%; top: -10px; z-index: 2; width: 90px; height: 22px; translate: -50% 0; rotate: -2deg; background: rgba(124,214,44,.75); }
-/* tear-off ticket: notches where the stub tears off, perforated edge */
-.ticket { position: relative; border-radius: 10px; background: #fff; box-shadow: 0 14px 26px -20px rgba(30,42,45,.6);
-  -webkit-mask: radial-gradient(10px at calc(100% - 7rem) 0, transparent 98%, #000) top / 100% 51% no-repeat, radial-gradient(10px at calc(100% - 7rem) 100%, transparent 98%, #000) bottom / 100% 51% no-repeat;
-          mask: radial-gradient(10px at calc(100% - 7rem) 0, transparent 98%, #000) top / 100% 51% no-repeat, radial-gradient(10px at calc(100% - 7rem) 100%, transparent 98%, #000) bottom / 100% 51% no-repeat; }
-.ticket-stub { background: var(--color-brand); border-left: 2px dashed rgba(30,42,45,.35); }
-.bundle { border-radius: 10px; background: #fff; border-top: 5px solid var(--color-brand); box-shadow: 0 14px 26px -20px rgba(30,42,45,.6); transition: transform 300ms var(--ease-out-expo); }
-.bundle:hover { transform: translateY(-4px); }
-
-/* ---------- Loading: a shelf being stocked ---------- */
-.stock-pack { display: block; width: 30px; border-radius: 4px 4px 2px 2px; background: linear-gradient(var(--color-brand), var(--color-brand-deep)); animation: stock-drop 1.5s var(--ease-out-expo) infinite both; }
-.stock-pack:nth-child(even) { background: linear-gradient(var(--color-ink-soft), var(--color-ink)); }
-@keyframes stock-drop { 0% { opacity: 0; transform: translateY(-40px); } 30%, 75% { opacity: 1; transform: none; } 100% { opacity: 0; } }
-
-@media (prefers-reduced-motion: reduce) {
-  .shop-entry { display: none; }
-  .sign-lit, .open-sign, .open-dot, .window-pack, .stock-pack { animation: none; }
-  .poster, .poster:hover { rotate: 0deg; transform: none; }
-}
-
-/* ---------- Store entrance: shop front with double glass doors that swing open (ShopEntry) ---------- */
-.entry-scene { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px 16px;
-  background: linear-gradient(#f4f6f6 0 72%, #d5dcdc 72%); /* wall, then pavement */
-  transform-origin: 50% 62%; animation: entry-walk .9s cubic-bezier(.55,0,.6,1) 1.35s forwards; }
-.entry-fascia { width: min(720px, 100%); border-radius: 10px 10px 4px 4px; background: linear-gradient(#263336, var(--color-ink)); padding: 18px 16px; text-align: center;
-  box-shadow: 0 18px 30px -22px rgba(30,42,45,.8); }
-.entry-awning { width: min(780px, 104%); margin: 8px 0 0; }
-.entry-doorway { position: relative; display: flex; width: min(420px, 82vw); height: min(56vh, 520px); margin-top: 14px;
-  border: 12px solid var(--color-ink); border-bottom: 0; border-radius: 8px 8px 0 0; background: var(--color-ink); perspective: 1100px; }
-.entry-inside { position: absolute; inset: 0; background: radial-gradient(70% 60% at 50% 45%, #fffef6, #e9f3df 60%, #c9dcbc); }
-.entry-door { position: relative; flex: 1; display: flex; flex-direction: column; align-items: center; padding-top: 22%;
-  background: linear-gradient(160deg, rgba(236,244,242,.97), rgba(205,220,216,.95)); border: 3px solid var(--color-ink-soft); backface-visibility: hidden; }
-.entry-door::after { content: ''; position: absolute; inset: 0; pointer-events: none;
-  background: linear-gradient(115deg, transparent 35%, rgba(255,255,255,.6) 42%, transparent 50%); }
-.entry-door-l { transform-origin: left center; animation: door-l .95s cubic-bezier(.45,0,.2,1) .75s forwards; }
-.entry-door-r { transform-origin: right center; animation: door-r .95s cubic-bezier(.45,0,.2,1) .75s forwards; }
-.entry-open { margin-top: 0; font-size: clamp(1rem, 3.4vw, 1.4rem); }
-.entry-hours { font-family: var(--font-display); font-weight: 600; font-size: clamp(.9rem, 3vw, 1.15rem); color: var(--color-ink-soft); letter-spacing: .04em; }
-.entry-handle-v { position: absolute; top: 48%; width: 7px; height: 70px; border-radius: 4px; background: var(--color-ink); }
-.entry-step { position: relative; width: min(470px, 90vw); height: 16px; background: linear-gradient(#c3cbcb, #aab4b4); border-radius: 0 0 6px 6px; }
-.entry-step .doormat { right: 50%; translate: 50% 0; width: 60%; }
-@keyframes door-l { to { transform: rotateY(-105deg); } }
-@keyframes door-r { to { transform: rotateY(105deg); } }
-@keyframes entry-walk { 65% { opacity: 0; } to { transform: scale(2.6); opacity: 0; } }
-
-/* ---------- Store interior ---------- */
-/* hanging sign: a board on two wires from the ceiling */
-.aisle-sign { position: relative; display: inline-block; margin-top: 30px; border-radius: 8px; background: var(--color-ink); color: #fff; padding: 12px 20px 14px;
-  border-bottom: 4px solid var(--color-brand); box-shadow: 0 16px 26px -18px rgba(30,42,45,.7); transform-origin: 50% -30px; }
-.aisle-sign::before, .aisle-sign::after { content: ''; position: absolute; top: -30px; width: 2px; height: 30px; background: linear-gradient(var(--color-line), var(--color-ink-soft)); }
-.aisle-sign::before { left: 22px; } .aisle-sign::after { right: 22px; }
-.aisle-sign-green { background: var(--color-brand); color: var(--color-ink); border-bottom-color: var(--color-ink); }
-@media (hover: hover) and (pointer: fine) { .aisle-sign:hover { animation: sign-swing 1.6s ease-in-out 1; } }
-/* till receipt: paper, mono print, torn zig-zag bottom */
-.receipt { position: relative; background: #fff; box-shadow: 0 18px 34px -24px rgba(30,42,45,.55), 0 0 0 1px var(--color-line);
-  border-radius: 6px 6px 0 0; padding-bottom: 2.25rem !important;
-  -webkit-mask: conic-gradient(from -45deg at bottom, #0000, #000 1deg 89deg, #0000 90deg) bottom / 18px 100%;
-          mask: conic-gradient(from -45deg at bottom, #0000, #000 1deg 89deg, #0000 90deg) bottom / 18px 100%; }
-/* product page: the pack on a display shelf, price on a shelf tag */
-.display-shelf { border: 10px solid var(--color-ink); border-bottom: 0; border-radius: 8px 8px 0 0; padding: 18px 18px 0; background-color: #eef1f1;
-  background-image: radial-gradient(rgba(30,42,45,.14) 1.3px, transparent 1.8px); background-size: 18px 18px; }
-.display-shelf .shelf-board, .display-shelf .shelf-lip { margin: 0 -18px; }
-.price-tag { position: relative; display: inline-block; min-width: min(100%, 320px); border-radius: 6px; background: #fff; padding: 12px 16px 10px;
-  border: 1px solid var(--color-line); border-top: 5px solid var(--color-brand); box-shadow: 0 10px 18px -14px rgba(30,42,45,.6); }
-/* footer: the shop front after closing */
-.footer-night { background: var(--color-ink); color: rgba(255,255,255,.75); }
-.footer-night .text-mute { color: rgba(255,255,255,.6); }
-.footer-night a:hover { color: #fff; }
-.footer-night .border-line { border-color: rgba(255,255,255,.12); }
-.footer-night h3 { color: #fff; }
-
-@media (prefers-reduced-motion: reduce) {
-  .aisle-sign:hover { animation: none; }
-}
+@keyframes fade { from { opacity: 0; } }
