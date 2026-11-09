@@ -6,7 +6,7 @@ import { CartProvider } from '@/components/cart';
 import CartDrawer from '@/components/CartDrawer';
 import Nav from '@/components/Nav';
 import { LangProvider } from '@/components/Lang';
-import { STORE, PHONE, FSSAI } from '@/lib/site';
+import { STORE, PHONE, FSSAI, SITE_URL } from '@/lib/site';
 import { getCategories } from '@/lib/catalog';
 import { getStore, onlineCombos } from '@/lib/store';
 import { getLang } from '@/lib/lang';
@@ -18,7 +18,7 @@ const hanken = Hanken_Grotesk({ subsets: ['latin'], variable: '--font-hanken', d
 const telugu = Noto_Sans_Telugu({ subsets: ['telugu'], variable: '--font-telugu', display: 'swap', preload: false });
 
 export const metadata: Metadata = {
-  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000'),
+  metadataBase: new URL(SITE_URL),
   title: { default: 'Fit Secrets | Supplements, Ayurveda & Organic Store in Vijayawada', template: '%s | Fit Secrets' },
   description: 'Genuine nutritional supplements, Ayurvedic and organic products, honey, ghee, millets and cold-pressed oils. Visit us on MG Road, Labbipet, Vijayawada, or order online and on WhatsApp.',
   openGraph: { type: 'website', siteName: 'Fit Secrets', locale: 'en_IN' },
@@ -33,7 +33,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   const ld = {
     '@context': 'https://schema.org', '@type': 'HealthAndBeautyBusiness', name: 'Fit Secrets Genuine Store', telephone: `+91${PHONE}`, email: STORE.email,
     address: { '@type': 'PostalAddress', streetAddress: STORE.address, addressLocality: 'Vijayawada', postalCode: '520010', addressRegion: 'Andhra Pradesh', addressCountry: 'IN' },
-    sameAs: [STORE.instagram, STORE.facebook], url: process.env.NEXT_PUBLIC_SITE_URL || undefined,
+    sameAs: [STORE.instagram, STORE.facebook], url: SITE_URL,
   };
 
   return (

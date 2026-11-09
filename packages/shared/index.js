@@ -276,6 +276,12 @@ export const ORDER_LABEL = {
   pending_payment: 'Awaiting payment', placed: 'Order placed', confirmed: 'Confirmed', packed: 'Packed', shipped: 'Shipped',
   out_for_delivery: 'Out for delivery', delivered: 'Delivered', cancelled: 'Cancelled',
 };
+// Store pickup orders (address.pickup) skip the courier: packed = ready at the counter, delivered = collected.
+export const isPickup = (o) => o?.address?.pickup === true || o?.address?.pickup === 'true';
+export const PICKUP_FLOW = ['placed', 'confirmed', 'packed', 'delivered'];
+export const PICKUP_LABEL = { ...ORDER_LABEL, packed: 'Ready for pickup', delivered: 'Picked up' };
+export const flowOf = (o) => (isPickup(o) ? PICKUP_FLOW : ORDER_FLOW);
+export const labelOf = (o, status = o?.status) => (isPickup(o) ? PICKUP_LABEL : ORDER_LABEL)[status];
 
 export const GOALS = {
   'muscle-gain': 'Muscle Gain', 'weight-loss': 'Weight Loss', endurance: 'Energy & Endurance', wellness: 'Daily Wellness',

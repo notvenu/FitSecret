@@ -6,5 +6,6 @@ export type ProductInfo = {
   nutrition?: { basis_g?: number; rows: [string, string, string?][] };
   ingredients?: { name: string; amount?: string; note?: string; allergen?: string }[];
   cautions?: string[]; storage?: string; pairs?: string[];
+  source?: { name: string; url: string; checked: string };
 };
 export const INFO: Record<string, ProductInfo>;

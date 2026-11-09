@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ORDER_FLOW, ORDER_LABEL, inr } from '@fitsecret/shared';
+import { flowOf, labelOf, isPickup, inr } from '@fitsecret/shared';
 import { COURIERS, providerFor } from '@fitsecret/shared/couriers';
 import { api, useApi, toast, fail } from '../api.js';
 import { CLOUD } from '@backend';
@@ -32,7 +32,7 @@ export default function Orders({ boot, list: shared, siteUrl }) {
   const bulkAdvance = async () => {
     let done = 0, skipped = 0;
     for (const o of picked) {
-      const next = ORDER_FLOW[ORDER_FLOW.indexOf(o.status) + 1];
+      const flow = flowOf(o), next = flow[flow.indexOf(o.status) + 1];
       if (!next || o.status === 'cancelled' || o.status === 'pending_payment' || (next === 'shipped' && !o.awb)) { skipped++; continue; }
       try { await api('/orders/' + o.id, { status: next }); done++; } catch (e) { fail(e); }
     }
@@ -68,7 +68,8 @@ export default function Orders({ boot, list: shared, siteUrl }) {
 function OrderCard({ o, onChange, picked, onPick, siteUrl }) {
   const [ship, setShip] = useState({ courier: o.courier || '', awb: o.awb || '', tracking_url: o.tracking_url || '' });
   const [note, setNote] = useState(o.internal_note || '');
-  const next = ORDER_FLOW[ORDER_FLOW.indexOf(o.status) + 1];
+  const flow = flowOf(o), next = flow[flow.indexOf(o.status) + 1];
+  const pickup = isPickup(o);
   const a = o.address || {};
   const update = async (body, msg = `Order ${o.order_no} updated`) => {
     try { await api('/orders/' + o.id, body); toast(msg); onChange(); } catch (e) { fail(e); }
@@ -92,18 +93,19 @@ function OrderCard({ o, onChange, picked, onPick, siteUrl }) {
           <span><span className="block font-mono text-sm font-semibold">{o.order_no}</span><span className="text-xs text-black/50">{new Date(o.created_at).toLocaleString('en-IN')}</span></span>
         </label>
         <div className="text-right">
-          <Badge c={C[o.status]}>{ORDER_LABEL[o.status]}</Badge>
+          {pickup && <Badge c="bg-violet-100 text-violet-800">Store pickup</Badge>} <Badge c={C[o.status]}>{labelOf(o)}</Badge>
           <div className="mt-1 text-xs"><span className="uppercase">{o.payment_method}</span> · <span className={PAY[o.payment_status] || 'text-amber-700'}>{o.payment_status.replace('_', ' ')}</span></div>
         </div>
       </div>
       <div className="mb-3 grid grid-cols-2 gap-3 text-sm">
         <div>
           <div className="font-medium">{o.name}</div>
-          <div className="text-black/60">{a.line1}{a.line2 && `, ${a.line2}`}<br />{a.city} {a.state} {a.pincode}</div>
+          <div className="text-black/60">{pickup ? 'Collects at the counter' : <>{a.line1}{a.line2 && `, ${a.line2}`}<br />{a.city} {a.state} {a.pincode}</>}</div>
           <div className="mt-1 flex flex-wrap gap-2 text-xs">
             <a className="text-sky-700 hover:underline" href={`tel:${phone}`}>{o.phone}</a>
             <a className="text-emerald-700 hover:underline" target="_blank" rel="noreferrer"
-              href={wa(`Hi ${o.name}, your Fit Secrets order ${o.order_no} is ${ORDER_LABEL[o.status]?.toLowerCase()}.${track && o.awb ? ` Track it here: ${track}` : ''}`)}>WhatsApp</a>
+              href={wa(pickup && o.status === 'packed' ? `Hi ${o.name}, your Fit Secrets order ${o.order_no} is ready. Collect it at our MG Road store; please show this order number.`
+                : `Hi ${o.name}, your Fit Secrets order ${o.order_no} is ${labelOf(o)?.toLowerCase()}.${track && o.awb ? ` Track it here: ${track}` : ''}`)}>WhatsApp</a>
             {track && <a className="text-black/50 hover:underline" target="_blank" rel="noreferrer" href={track}>Customer's tracking page ↗</a>}
           </div>
         </div>
@@ -121,7 +123,7 @@ function OrderCard({ o, onChange, picked, onPick, siteUrl }) {
           <Btn size="sm" onClick={() => confirm(`Mark ${inr(o.total)} as refunded to ${o.name}?`) && update({ refund: 'done' }, 'Marked refunded')}>Mark refunded</Btn>
         </div>
       )}
-      {!['delivered', 'cancelled', 'pending_payment'].includes(o.status) && (
+      {!pickup && !['delivered', 'cancelled', 'pending_payment'].includes(o.status) && (
         <div className="mb-3 grid grid-cols-3 gap-2">
           <Field label="Courier" list="couriers" value={ship.courier} onChange={(e) => setShip({ ...ship, courier: e.target.value })} placeholder="Shiprocket / Delhivery"
             hint={providerFor(ship.courier) ? 'Live tracking on website' : undefined} />
@@ -137,14 +139,14 @@ function OrderCard({ o, onChange, picked, onPick, siteUrl }) {
         </div>
       </details>
       <ol className="mb-3 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-black/50">
-        {o.events.map((e, i) => <li key={i}>● {ORDER_LABEL[e.status]} <span className="text-black/35">{new Date(e.created_at).toLocaleString('en-IN', { dateStyle: 'short', timeStyle: 'short' })}</span></li>)}
+        {o.events.map((e, i) => <li key={i}>● {labelOf(o, e.status)} <span className="text-black/35">{new Date(e.created_at).toLocaleString('en-IN', { dateStyle: 'short', timeStyle: 'short' })}</span></li>)}
       </ol>
       <div className="flex flex-wrap gap-2">
-        {next && o.status !== 'cancelled' && o.status !== 'pending_payment' && <Btn v="brand" onClick={advance}>Mark {ORDER_LABEL[next]}</Btn>}
+        {next && o.status !== 'cancelled' && o.status !== 'pending_payment' && <Btn v="brand" onClick={advance}>Mark {labelOf(o, next)}</Btn>}
         {['shipped', 'out_for_delivery'].includes(o.status) && <Btn onClick={() => update(withUrl())}>Save tracking</Btn>}
         {o.status !== 'cancelled' && !CLOUD && <Btn onClick={invoice}>{o.invoice_id ? 'Print invoice' : 'Generate invoice'}</Btn>} {/* bills are made by the POS counter */}
         {o.status !== 'cancelled' && <Btn v="ghost" onClick={() => printOrders('slips', [o.id])}>Packing slip</Btn>}
-        {o.status !== 'cancelled' && <Btn v="ghost" onClick={() => printOrders('labels', [o.id])}>Label</Btn>}
+        {o.status !== 'cancelled' && !pickup && <Btn v="ghost" onClick={() => printOrders('labels', [o.id])}>Label</Btn>}
         {!['delivered', 'cancelled', 'shipped', 'out_for_delivery'].includes(o.status) && (
           <Btn v="ghost" className="ml-auto text-red-600" onClick={() => confirm('Cancel order and return stock?') && update({ status: 'cancelled', note: prompt('Reason?') || 'Cancelled by store' })}>Cancel</Btn>
         )}

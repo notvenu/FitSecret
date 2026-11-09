@@ -6,7 +6,8 @@ import GoalSelector from '@/components/GoalSelector';
 import IngredientWheel from '@/components/IngredientWheel';
 import ProductTile from '@/components/ProductTile';
 import { WhatsApp } from '@/components/ui';
-import { getProducts, getCategories } from '@/lib/catalog';
+import { getProducts, getCategories, getBrands } from '@/lib/catalog';
+import BrandBelt from '@/components/BrandBelt';
 import { GOALS, goalsOf } from '@/lib/goals';
 import { getT } from '@/lib/lang';
 import { STORE, PHONE, FSSAI, MAP, HOURS } from '@/lib/site';
@@ -14,7 +15,7 @@ import { STORE, PHONE, FSSAI, MAP, HOURS } from '@/lib/site';
 const INGREDIENTS = ['Ashwagandha', 'Giloy', 'Shilajit', 'Moringa', 'Foxtail millet', 'Triphala', 'Amla', 'Wheat grass', 'Turmeric', 'Cold-pressed groundnut oil', 'Forest honey', 'A2 ghee', 'Whey isolate', 'Creatine'];
 
 export default async function Home() {
-  const [products, cats, t] = await Promise.all([getProducts(), getCategories(), getT()]);
+  const [products, cats, brands, t] = await Promise.all([getProducts(), getCategories(), getBrands(), getT()]);
   const withImg = products.filter((p) => p.image && p.inStock);
   const best = [...withImg.filter((p) => p.featured), ...withImg.filter((p) => !p.featured)].slice(0, 8);
   const goals = GOALS.map((g) => {
@@ -82,6 +83,9 @@ export default async function Home() {
           {best.map((p) => <div key={p.key} className="snap-start"><ProductTile p={p} /></div>)}
         </div>
       </section>
+
+      {/* BRANDS: what we stock, each straight to its shelf */}
+      <BrandBelt brands={brands} t={t} />
 
       {/* INGREDIENT MARQUEE */}
       <div className="overflow-hidden border-y-2 border-indigo bg-paper py-4" aria-hidden>

@@ -134,6 +134,8 @@ select.field { appearance: none; background-image: url("data:image/svg+xml,%3Csv
 /* Paisley-and-leaf repeat at 3% on colour blocks (§4.3) */
 .paisley { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='80' viewBox='0 0 80 80'%3E%3Cg fill='none' stroke='%23000' stroke-width='2' opacity='.05'%3E%3Cpath d='M20 50c-8-6-6-22 8-24 12-2 16 14 6 20-6 4-10-2-6-6'/%3E%3Cpath d='M58 22c6 4 10 12 4 18M62 18c-2 10-12 14-12 14'/%3E%3C/g%3E%3C/svg%3E"); }
 
+/* Brand belts: soft edges so stickers slide in and out of view */
+.brand-belt { mask-image: linear-gradient(90deg, transparent, #000 6%, #000 94%, transparent); }
 /* Marigold garland marquee (effect #15) */
 .marquee { display: flex; width: max-content; animation: marquee 60s linear infinite; }
 .marquee:hover { animation-play-state: paused; }
@@ -195,6 +197,7 @@ details[open]::details-content { block-size: auto; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 150ms !important; animation-delay: 0s !important; animation-iteration-count: 1 !important; transition-duration: 150ms !important; scroll-behavior: auto !important; }
   .marquee, .skeleton, .pulse-dot, .tree-sway, .vine-progress path { animation: none !important; }
+  .brand-belt { overflow-x: auto; mask-image: none; } /* still belt: scroll it by hand */
   .vine-progress { display: none; }
   .tree-draw, .tree-pop, .tree-seed, .stamp-in > span, .rise { animation-name: fade !important; }
 }

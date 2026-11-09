@@ -11,3 +11,4 @@ export function unitPrice(item: { id: string; sale_price: number; wholesale_pric
 export function orderTotals(subtotal: number, discount: number, store: StoreSettings): { net: number; shipping: number; total: number };
 export function couponError(msg: string): string | null;
 export function counterCoupon(code: string, coupons: any[], subtotal: number, today: string): number;
+export function sameDay(pincode: string, opts: { cutoff: number; prefixes: string[] }, now?: Date): boolean;

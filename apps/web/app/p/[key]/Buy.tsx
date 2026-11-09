@@ -1,7 +1,8 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Check, Minus, Plus, ShoppingBag } from 'lucide-react';
+import { Check, Minus, Plus, ShoppingBag, Zap } from 'lucide-react';
+import { PICKUP, SAME_DAY } from '@/lib/settings';
 import type { Product } from '@/lib/catalog';
 import { useCart, MAX_QTY } from '@/components/cart';
 import { useT } from '@/components/Lang';
@@ -9,7 +10,7 @@ import { lineOf } from '@/components/ProductTile';
 import { inr0, pourToCart, Magnetic, WhatsApp } from '@/components/ui';
 
 // Variant selection (STATES §6) updates price, stock and ?v= in the URL. Button: idle → added (1.8s) → idle; error when stock caps the qty.
-export default function Buy({ p, phone: PHONE }: { p: Product; phone: string }) {
+export default function Buy({ p, phone: PHONE, expiry = {} }: { p: Product; phone: string; expiry?: Record<string, string> }) {
   const t = useT();
   const { add, lines } = useCart();
   const sp = useSearchParams();
@@ -101,6 +102,13 @@ export default function Buy({ p, phone: PHONE }: { p: Product; phone: string }) 
         {state === 'error' || msg ? <span className={state === 'error' ? 'text-madder' : ''}>{msg}</span>
           : v.stock > 0 && v.stock <= 5 ? <span className="text-madder">{t('pdp.left', { n: v.stock })}</span> : v.stock > 0 ? <span className="text-river">{t('pdp.inStock')}</span> : null}
       </p>
+      {v.stock > 0 && expiry[v.id] && (
+        <p className="num mt-1 text-sm text-ink-soft">Best before {new Date(expiry[v.id]).toLocaleDateString('en-IN', { month: 'short', year: 'numeric' })} or later</p>
+      )}
+      {v.stock > 0 && (SAME_DAY.cutoff || PICKUP) && (
+        <p className="mt-1 flex items-start gap-2 text-sm"><Zap size={16} className="mt-0.5 shrink-0 text-leaf" />
+          <span>{[SAME_DAY.cutoff && `Same-day delivery in Vijayawada on orders by ${SAME_DAY.cutoff % 12 || 12} ${SAME_DAY.cutoff < 12 ? 'am' : 'pm'}`, PICKUP && 'free pickup at MG Road'].filter(Boolean).join(' · ')}</span></p>
+      )}
       {v.stock > 0 && <a href={ask} target="_blank" rel="noreferrer" className="mt-1 inline-flex items-center gap-2 text-sm font-semibold text-river"><WhatsApp size={16} />{t('pdp.ask')}</a>}
 
       {/* Sticky buy bar (mobile): slides up when the main button scrolls away */}

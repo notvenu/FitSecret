@@ -18,7 +18,7 @@ export function Btn({ v = 'outline', className, size = 'md', ...p }) {
     <button
       type="button"
       {...p}
-      className={cx('inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-full font-semibold transition-[background,border,color,transform] active:scale-[.97] disabled:pointer-events-none disabled:opacity-40',
+      className={cx('inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-full font-bold transition-[background,border,color,transform] duration-200 ease-[cubic-bezier(.34,1.56,.64,1)] active:scale-x-[1.06] active:scale-y-[.92] active:duration-100 disabled:pointer-events-none disabled:opacity-40',
         size === 'sm' ? 'px-3 py-1 text-xs' : 'px-4.5 py-2 text-sm', BTN[v], className)}
     />
   );

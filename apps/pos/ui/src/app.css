@@ -1,32 +1,29 @@
 @import "tailwindcss";
 
-/* Same brand system as the website: Clash Display headings, Satoshi text, charcoal ink + logo green.
-   Fonts are bundled in public/fonts so the counter works offline.
-   Shape rule (matches web): buttons and chips are pills, cards 14px, inputs 10px. */
-@font-face { font-family: Satoshi; src: url(/fonts/Satoshi-400.woff2) format("woff2"); font-weight: 400; font-display: swap; }
-@font-face { font-family: Satoshi; src: url(/fonts/Satoshi-500.woff2) format("woff2"); font-weight: 500; font-display: swap; }
-@font-face { font-family: Satoshi; src: url(/fonts/Satoshi-700.woff2) format("woff2"); font-weight: 600 700; font-display: swap; }
-@font-face { font-family: Satoshi; src: url(/fonts/Satoshi-900.woff2) format("woff2"); font-weight: 800 900; font-display: swap; }
-@font-face { font-family: "Clash Display"; src: url(/fonts/ClashDisplay-500.woff2) format("woff2"); font-weight: 500; font-display: swap; }
-@font-face { font-family: "Clash Display"; src: url(/fonts/ClashDisplay-600.woff2) format("woff2"); font-weight: 600; font-display: swap; }
-@font-face { font-family: "Clash Display"; src: url(/fonts/ClashDisplay-700.woff2) format("woff2"); font-weight: 700; font-display: swap; }
+/* Same brand system as the website (apps/web/app/globals.css, DESIGN v3 "Tree of Life"): Syne headings, Hanken Grotesk text,
+   indigo + lime + coral on sky. Fonts (latin variable files) are bundled in public/fonts so the counter works offline.
+   The old role names are kept and remapped so every page picks up the palette: ink = indigo, brand = lime, flame = coral.
+   Shape rule (matches web): buttons and chips are pills, cards are stickers (2px indigo stroke + hard offset shadow), inputs 14px. */
+@font-face { font-family: Syne; src: url(/fonts/Syne.woff2) format("woff2"); font-weight: 400 800; font-display: swap; }
+@font-face { font-family: "Hanken Grotesk"; src: url(/fonts/HankenGrotesk.woff2) format("woff2"); font-weight: 100 900; font-display: swap; }
 
 @theme {
-  --font-sans: Satoshi, "Segoe UI", system-ui, sans-serif;
+  --font-sans: "Hanken Grotesk", "Segoe UI", system-ui, sans-serif;
   --font-mono: "Cascadia Mono", Consolas, ui-monospace, monospace;
-  --font-display: "Clash Display", Satoshi, sans-serif;
-  /* Fit Secrets logo colours, identical to apps/web/app/globals.css */
-  --color-ink: #1e2a2d;
-  --color-ink-2: #2b393d;
-  --color-brand: #7cd62c;
-  --color-brand-d: #3d7a10; /* green text on white (AA contrast) */
-  --color-flame: #c2410c;
-  --color-paper: #f3f5f5;
-  --color-line: #e4e8e8;
+  --font-display: Syne, "Hanken Grotesk", sans-serif;
+  --color-ink: #17237A;     /* indigo: sidebar, primary buttons, strokes */
+  --color-ink-2: #22309A;   /* indigo hover */
+  --color-deep: #0F1537;    /* body text */
+  --color-brand: #C9F26B;   /* lime: active states, secondary buttons (indigo text on it) */
+  --color-brand-d: #1F7A43; /* leaf, darkened for text / white-on-green (AA) */
+  --color-flame: #C8372B;   /* coral, darkened for white text (AA) */
+  --color-marigold: #FFB81F;
+  --color-paper: #EEF3FF;   /* sky */
+  --color-line: #D6DEF5;
 }
 
 @layer base {
-  body { @apply bg-paper font-sans text-ink antialiased; font-feature-settings: "tnum"; }
+  body { @apply bg-paper font-sans text-deep antialiased; font-feature-settings: "tnum"; }
   /* text boxes show focus with their own ring (.input); everything else gets a green outline that reads on white and on the dark sidebar */
   input:not([type=checkbox]):not([type=radio]), select, textarea { @apply outline-none; }
   :focus-visible { @apply outline-2 outline-offset-2 outline-brand-d; }
@@ -34,11 +31,16 @@
   tr:focus-visible { @apply bg-brand/15 outline-none; box-shadow: inset 3px 0 0 var(--color-brand-d); }
 }
 
+/* web .field: indigo stroke, a green vine draws along the bottom on focus */
 @utility input {
-  @apply w-full rounded-[10px] border border-line bg-white px-3 py-2 text-sm transition-colors placeholder:text-black/40 focus:border-ink focus:ring-2 focus:ring-brand/50;
+  @apply w-full rounded-[14px] border-2 border-line bg-white px-3 py-2 text-sm placeholder:text-black/40 focus:border-ink;
+  background: white linear-gradient(#2E9E5B, #2E9E5B) no-repeat left bottom / 0 3px;
+  transition: background-size .35s cubic-bezier(.22,1,.36,1), border-color .2s;
+  &:focus { background-size: 100% 3px; }
 }
-@utility card { @apply rounded-[14px] border border-line bg-white; }
-@utility display { font-family: var(--font-display); font-weight: 600; letter-spacing: -0.02em; word-spacing: 0.08em; line-height: 1; }
+/* web .sticker */
+@utility card { @apply rounded-[20px] border-2 border-ink bg-white; box-shadow: 4px 4px 0 rgb(23 35 122 / .12); }
+@utility display { font-family: var(--font-display); font-weight: 800; letter-spacing: -0.02em; line-height: 1; }
 
 @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 /* backwards, not both: holding the end transform would turn every page into a containing block for fixed overlays */

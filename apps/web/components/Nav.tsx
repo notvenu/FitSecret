@@ -45,7 +45,7 @@ export default function Nav({ cats, phone, note }: { cats: Cat[]; phone: string;
     return () => removeEventListener('keydown', k);
   }, []);
 
-  const links: [string, string][] = [['/shop', t('nav.shop')], ['/#goals', t('nav.goals')], ['/wholesale', t('nav.wholesale')], ['/verify', t('nav.verify')], ['/visit', t('nav.visit')]];
+  const links: [string, string][] = [['/shop', t('nav.shop')], ['/brands', t('nav.brands')], ['/#goals', t('nav.goals')], ['/wholesale', t('nav.wholesale')], ['/verify', t('nav.verify')], ['/visit', t('nav.visit')]];
 
   return (
     <>

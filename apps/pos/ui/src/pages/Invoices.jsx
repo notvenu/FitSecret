@@ -87,7 +87,7 @@ export function InvoiceView({ inv, user, branch, onClose, onChange }) {
   const due = Math.max(0, inv.total - inv.paid);
   const print = (fmt) => window.open(`#/print/${inv.id}/${fmt}`, '_blank', fmt.startsWith('thermal') ? 'width=420,height=700' : 'width=900,height=900');
   const wa = `https://wa.me/91${(inv.party_phone || '').replace(/\D/g, '').slice(-10)}?text=${encodeURIComponent(
-    `Thank you for shopping at FitSecret!\nInvoice ${inv.no} dated ${inv.date}\nAmount: ${inr(inv.total)}${due ? `\nBalance due: ${inr(due)}` : ''}`)}`;
+    `Thank you for shopping at FitSecret!\nInvoice ${inv.no} dated ${inv.date}\nAmount: ${inr(inv.total)}${due ? `\nBalance due: ${inr(due)}` : ''}${branch?.settings?.invoice?.review_url ? `\n\nHappy with us? A quick Google review helps a lot: ${branch.settings.invoice.review_url}` : ''}`)}`;
   const cancel = async () => {
     const reason = prompt(`Cancel ${inv.no}? Stock and payments will be reversed.\n\nReason (kept in the audit trail):`);
     if (reason == null) return;

@@ -1,7 +1,7 @@
 // End-to-end sync: two SQLite devices <-> real migration SQL running in PGlite (Postgres in WASM) with Supabase auth stubbed.
 import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { PGlite } from '@electric-sql/pglite';
 import { TABLES, columnsOf } from '@fitsecret/shared';
 import * as D from '../server/db.js';
@@ -44,7 +44,9 @@ function device(branchId) {
 before(async () => {
   pg = await PGlite.create();
   await pg.exec(SUPABASE_STUB);
-  for (const f of ['0001_init.sql', '0002_gold.sql', '0003_vyapar_rest.sql', '0004_online_store.sql', '0005_online_inbox.sql', '0006_staff_bulk.sql', '0007_counter.sql', '0008_variants_offers.sql', '0009_channels.sql', '0010_offer_where.sql', '0011_locations.sql', '0012_companies.sql', '0013_loyalty_online.sql', '0014_cheques.sql', '0015_orders_console.sql']) await pg.exec(readFileSync(new URL('../../../supabase/migrations/' + f, import.meta.url), 'utf8'));
+  // every migration in order (0006_live_baseline stands in for 0006–0015, which were applied live but never committed)
+  const dir = new URL('../../../supabase/migrations/', import.meta.url);
+  for (const f of readdirSync(dir).filter((f) => /^\d{4}_.*\.sql$/.test(f)).sort()) await pg.exec(readFileSync(new URL(f, dir), 'utf8'));
   await pg.exec(`insert into auth.users values ('${STAFF}'), ('${CUSTOMER}'); insert into staff (user_id, name, role) values ('${STAFF}', 'Sync', 'admin');`);
 });
 
@@ -149,6 +151,7 @@ test('online order -> reserves stock -> POS ships -> customer tracks', async () 
   assert.equal(t.order.awb, 'DL123');
   assert.deepEqual(t.events.map((e) => e.status), ['placed', 'shipped']);
   assert.equal(await anon('track_order', { p_order_no: placed.order_no, p_phone: '9999999999' }), null);
+  for (const k of ['internal_note', 'payment_ref', 'points_party', 'branch_id', 'invoice_id', 'user_id']) assert.ok(!(k in t.order), `track_order leaks ${k}`);
 
   // customer sees own order via RLS, other customers don't
   await pg.query(`select set_config('request.jwt.claim.sub', $1, false)`, [CUSTOMER]);
@@ -181,4 +184,18 @@ test('the sync password is never kept on disk: an older setup that stored one ha
   assert.equal(cfg.password, undefined);
   assert.deepEqual([cfg.url, cfg.email, s.status().configured], ['https://x.supabase.co', 'counter@shop.in', true]);
   s.stop();
+});
+
+test('website views are read-only for anon and signed-in customers (no PATCH /shop_combos to reprice a combo)', async () => {
+  for (const role of ['anon', 'authenticated']) {
+    await pg.exec(`set role ${role}`);
+    try {
+      for (const [v, sql] of [['shop_combos', 'update shop_combos set price = 1'], ['shop_combos', "insert into shop_combos (name, price) values ('x', 1)"],
+        ['shop_combos', 'delete from shop_combos'], ['shop_items', 'update shop_items set sale_price = 1'], ['shop_reviews', 'delete from shop_reviews'],
+        ['shop_certificates', 'delete from shop_certificates']]) {
+        // shop_combos is a single-table (auto-updatable) view: only the revoke in 0017 stops it. The joined views were never writable.
+        await assert.rejects(pg.exec(sql), v === 'shop_combos' ? /permission denied/ : /permission denied|cannot (update|insert into|delete from) view/, `${role} could write ${v}`);
+      }
+    } finally { await pg.exec('reset role'); }
+  }
 });

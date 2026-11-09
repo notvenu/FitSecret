@@ -16,7 +16,7 @@ const SECTIONS = [
   ['company', 'Company details', 'Legal name and GSTIN, shared by all its branches', 'company firm business legal name gstin gst pan registered address email'],
   ['store', 'Branch details', 'This branch: name, address, phone, its own GSTIN', 'branch store name address phone gstin gst state code shop outlet'],
   ['billing', 'Billing', 'Stock rules, which documents you use, expiry hints, bill numbers', 'negative stock estimate quotation proforma challan sale order purchase order expiry markdown discount serial imei mfg manufacturing tcs currency dollar prefix number numbering'],
-  ['print', 'Bill printing', 'Layout, UPI QR, bank details, terms on the bill', 'print a4 layout upi qr scan pay bank account ifsc terms footer words saved mrp tally modern'],
+  ['print', 'Bill printing', 'Layout, UPI QR, bank details, terms on the bill', 'print a4 layout upi qr scan pay bank account ifsc terms footer words saved mrp tally modern google review'],
   ['staff', 'Staff & permissions', 'Discount limit, price changes, editing bills, incentive', 'cashier discount limit rate lock edit bill permission menu short simple incentive salesperson pin login'],
   ['customers', 'Customers', 'Extra customer details, trainer / gym commission', 'custom field birthday date of birth gym trainer goal referral commission loyalty points'],
   ['insights', 'Insights', 'Recommendations on your screens and the weekly plan', 'insight recommendation plan suggestion tips advice analysis ai'],
@@ -280,8 +280,9 @@ export const INVOICE_DEFAULTS = { words: true, saved: true, upi: '', bank: '', t
 const THEMES = [['classic', 'Classic'], ['tally', 'Tally (boxed grid)'], ['modern', 'Modern (brand header)']];
 function Printing({ b, reload }) {
   const inv = { ...INVOICE_DEFAULTS, ...b.settings?.invoice };
-  const { f, set, bind, dirty } = useSection({ theme: inv.theme, upi: inv.upi || '', bank: inv.bank || '', terms: inv.terms || '', footer: inv.footer || '', words: !!inv.words, saved: !!inv.saved });
+  const { f, set, bind, dirty } = useSection({ theme: inv.theme, upi: inv.upi || '', bank: inv.bank || '', terms: inv.terms || '', footer: inv.footer || '', words: !!inv.words, saved: !!inv.saved, review_url: inv.review_url || '' });
   const save = () => {
+    if (f.review_url && !/^https:\/\//.test(f.review_url.trim())) return toast('Review link should start with https://', 'err');
     if (f.upi && !/^[\w.-]+@[\w.-]+$/.test(f.upi.trim())) return toast('UPI ID looks wrong (like shopname@okhdfcbank)', 'err');
     saveSettings(b, {}, { ...f, upi: f.upi.trim() }, 'Print settings saved', reload);
   };
@@ -296,6 +297,7 @@ function Printing({ b, reload }) {
         <Row id="p-foot" label="Thank-you line" hint="Last line of every receipt"><input id="p-foot" className="input" {...bind('footer')} /></Row>
         <Row id="p-words" label="Amount in words" hint="“Rupees Four Hundred Twenty Only”"><Switch id="p-words" checked={f.words} onChange={(v) => set('words', v)} /></Row>
         <Row id="p-saved" label="“You saved ₹…” against MRP" hint="Customers love seeing it"><Switch id="p-saved" checked={f.saved} onChange={(v) => set('saved', v)} /></Row>
+        <Row id="p-review" label="Google review link" hint="Added to bills sent on WhatsApp. Google Business Profile → Ask for reviews → copy link"><input id="p-review" className="input" {...bind('review_url')} placeholder="https://g.page/r/…/review" /></Row>
       </Group>
       <Group title="A4 layout">
         <Row id="p-theme" label="Style of A4 bills"><select id="p-theme" className="input" {...bind('theme')}>{THEMES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></Row>

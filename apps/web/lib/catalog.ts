@@ -102,15 +102,17 @@ export async function getCategories(): Promise<Category[]> {
 }
 
 export async function getBrands(): Promise<Brand[]> {
-  const m = new Map<string, Brand>();
+  const m = new Map<string, Brand & { top?: Product }>();
   for (const p of await getProducts()) {
     if (!p.brand) continue;
     const b = m.get(p.brand) || { name: p.brand, count: 0, image: null };
     b.count++;
-    b.image ||= p.image;
+    // the brand's flagship pack: a bestseller, else in stock, else the priciest (usually the big tub, not a sample or a spray)
+    const score = (x: Product) => (x.featured ? 1e7 : 0) + (x.inStock ? 1e6 : 0) + x.price;
+    if (p.image && (!b.top || score(p) > score(b.top))) { b.top = p; b.image = p.image; }
     m.set(p.brand, b);
   }
-  return [...m.values()].sort((a, b) => b.count - a.count);
+  return [...m.values()].map(({ top: _, ...b }) => b).sort((a, b) => b.count - a.count);
 }
 
 export const discount = (mrp: number, price: number) => (mrp > price ? Math.round(((mrp - price) / mrp) * 100) : 0);
@@ -140,4 +142,11 @@ export async function alsoBought(itemIds: string[]): Promise<string[]> {
   if (!live || !itemIds.length) return [];
   const { data } = await anon().rpc('also_bought', { p_items: itemIds, p_limit: 12 });
   return ((data as { item_id: string }[]) || []).map((r) => r.item_id);
+}
+
+// Best-before of the batch we will ship next, per variant (earliest unexpired batch in stock). Needs 0016; empty before it.
+export async function getExpiry(itemIds: string[]): Promise<Record<string, string>> {
+  if (!live || !itemIds.length) return {};
+  const { data } = await anon().rpc('shop_expiry', { p_items: itemIds });
+  return Object.fromEntries(((data as { item_id: string; expiry: string }[]) || []).map((r) => [r.item_id, r.expiry]));
 }

@@ -39,3 +39,18 @@ test('unit price: buyer rate or % off, bulk price from its quantity when lower',
   assert.equal(unitPrice(it, 5, { price_discount: 0, rates: { w: 850 } }), 850, 'own rate wins when lower');
   assert.equal(unitPrice({ id: 'x', sale_price: 499 }, 50, { price_discount: 10, rates: { w: 1 } }), 449.1, 'no bulk price set');
 });
+
+test('same-day delivery: local pincode before the IST cutoff only', async () => {
+  const { sameDay } = await import('../store.js');
+  const { isPickup, flowOf, labelOf } = await import('../index.js');
+  const o = { cutoff: 18, prefixes: ['520'] };
+  assert.equal(sameDay('520010', o, new Date('2026-11-09T11:00:00Z')), true); // 16:30 IST
+  assert.equal(sameDay('520010', o, new Date('2026-11-09T13:00:00Z')), false); // 18:30 IST
+  assert.equal(sameDay('500001', o, new Date('2026-11-09T05:00:00Z')), false); // Hyderabad
+  assert.equal(sameDay('520010', { cutoff: 0, prefixes: ['520'] }), false);
+  const p = { address: { pickup: true }, status: 'packed' };
+  assert.equal(isPickup(p), true);
+  assert.deepEqual(flowOf(p), ['placed', 'confirmed', 'packed', 'delivered']);
+  assert.equal(labelOf(p), 'Ready for pickup');
+  assert.equal(labelOf({ address: {}, status: 'packed' }), 'Packed');
+});

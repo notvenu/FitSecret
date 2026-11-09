@@ -60,6 +60,15 @@ export function orderTotals(subtotal, discount, store) {
   return { net, shipping, total: round2(net + shipping) };
 }
 
+// Same-day delivery promise: a local pincode (prefix match) and ordered before the cutoff hour, India time.
+// cutoff 0 / no prefixes = feature off. Fulfilment is the shop's own delivery; nothing books it automatically.
+export function sameDay(pincode, { cutoff, prefixes }, now = new Date()) {
+  const pin = String(pincode || '');
+  if (!cutoff || !prefixes?.length || !/^\d{6}$/.test(pin) || !prefixes.some((p) => pin.startsWith(p))) return false;
+  const hourIST = (now.getUTCHours() + now.getUTCMinutes() / 60 + 5.5) % 24;
+  return hourIST < cutoff;
+}
+
 // Website customers, one per phone, from orders (cancelled excluded from spend).
 export function customersFromOrders(orders) {
   const m = new Map();

@@ -1,7 +1,8 @@
 'use client';
 import { useCallback, useEffect, useState } from 'react';
-import { Loader2, ExternalLink, Check, XCircle } from 'lucide-react';
-import { inr, ORDER_FLOW, ORDER_LABEL } from '@fitsecret/shared';
+import { Loader2, ExternalLink, Check, XCircle, Star } from 'lucide-react';
+import { inr, flowOf, labelOf, isPickup } from '@fitsecret/shared';
+import { REVIEW_URL } from '@/lib/settings';
 import type { Tracking } from '@fitsecret/shared/couriers';
 import { supabase } from '@/lib/supabase';
 import { payOnline } from '@/lib/pay';
@@ -37,7 +38,8 @@ export default function Tracker({ no: initNo, phone: initPhone, fresh }: { no: s
   useEffect(() => { if (initNo && initPhone) lookup(initNo, initPhone); }, [initNo, initPhone]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const o = t?.order;
-  const step = o ? ORDER_FLOW.indexOf(o.status === 'pending_payment' ? 'placed' : o.status) : -1;
+  const flow = o ? flowOf(o) : [];
+  const step = o ? flow.indexOf(o.status === 'pending_payment' ? 'placed' : o.status) : -1;
   const at = (s: string) => t?.events.find((e) => e.status === s)?.at;
   const retry = async () => {
     if (!o) return;
@@ -83,8 +85,8 @@ export default function Tracker({ no: initNo, phone: initPhone, fresh }: { no: s
           {o.status === 'cancelled' ? (
             <p className="mt-6 flex items-center gap-3 rounded-[20px] bg-madder/10 p-5 text-madder"><XCircle /> This order was cancelled. Any amount paid is refunded to the original payment method.</p>
           ) : (
-            <ol className="mt-8 grid grid-cols-6 gap-1" aria-label="Order progress">
-              {ORDER_FLOW.map((s: string, i: number) => (
+            <ol className={`mt-8 grid gap-1 ${flow.length === 4 ? 'grid-cols-4' : 'grid-cols-6'}`} aria-label="Order progress">
+              {flow.map((s: string, i: number) => (
                 <li key={s} className="relative grid justify-items-center gap-2 text-center" aria-current={i === step ? 'step' : undefined}>
                   {i > 0 && (
                     <span className="absolute top-[11px] right-1/2 left-[-50%] h-0.5 bg-sage" aria-hidden>
@@ -92,11 +94,19 @@ export default function Tracker({ no: initNo, phone: initPhone, fresh }: { no: s
                     </span>
                   )}
                   <span className={`relative grid size-6 place-items-center rounded-full ${i < step ? 'bg-river text-chalk' : i === step ? 'pulse-dot bg-haldi' : 'bg-sage'}`}>{i < step && <Check size={14} />}</span>
-                  <span className={`text-[11px] leading-tight md:text-sm ${i <= step ? 'font-semibold' : 'text-ink-soft'}`}>{(ORDER_LABEL as Record<string, string>)[s]}</span>
+                  <span className={`text-[11px] leading-tight md:text-sm ${i <= step ? 'font-semibold' : 'text-ink-soft'}`}>{labelOf(o, s)}</span>
                   {at(s) && <span className="hidden text-xs text-ink-soft md:block">{when(at(s)!)}</span>}
                 </li>
               ))}
             </ol>
+          )}
+          {isPickup(o) && o.status !== 'cancelled' && o.status !== 'delivered' && (
+            <p className="mt-6 rounded-[20px] bg-sage p-4 text-sm">{o.status === 'packed' ? <b>Ready to collect. </b> : 'We will WhatsApp you when it is ready. '}
+              Fit Secrets, Datta Towers, MG Road, Labbipet. Show order number <b className="num">{o.order_no}</b> at the counter.</p>
+          )}
+          {o.status === 'delivered' && REVIEW_URL && (
+            <a href={REVIEW_URL} target="_blank" rel="noreferrer" className="mt-6 flex items-center gap-3 rounded-[20px] border-2 border-indigo bg-haldi/20 p-4 text-sm font-semibold text-indigo">
+              <Star size={20} className="shrink-0" />Happy with your order? A Google review helps other people in Vijayawada find a genuine store.</a>
           )}
 
           {o.status === 'pending_payment' && (
@@ -127,8 +137,8 @@ export default function Tracker({ no: initNo, phone: initPhone, fresh }: { no: s
             ))}</ul>
             <dl className="num mt-3 grid gap-1 border-t border-line pt-3 text-sm">
               {o.discount > 0 && <div className="flex justify-between text-river"><dt>Discount{o.coupon && ` (${o.coupon})`}</dt><dd>−{inr(o.discount)}</dd></div>}
-              <div className="flex justify-between"><dt className="text-ink-soft">Delivery</dt><dd>{o.shipping ? inr(o.shipping) : 'Free'}</dd></div>
-              <div className="flex justify-between text-base font-bold"><dt>Total · {o.payment_method === 'cod' ? 'Cash on delivery' : o.payment_status === 'paid' ? 'Paid online' : 'Online'}</dt><dd>{inr(o.total)}</dd></div>
+              <div className="flex justify-between"><dt className="text-ink-soft">{isPickup(o) ? 'Store pickup' : 'Delivery'}</dt><dd>{o.shipping ? inr(o.shipping) : 'Free'}</dd></div>
+              <div className="flex justify-between text-base font-bold"><dt>Total · {o.payment_method === 'cod' ? (isPickup(o) ? 'Pay at the store' : 'Cash on delivery') : o.payment_status === 'paid' ? 'Paid online' : 'Online'}</dt><dd>{inr(o.total)}</dd></div>
             </dl>
           </section>
         </div>

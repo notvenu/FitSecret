@@ -2,13 +2,14 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
-import { Banknote, CreditCard, Lock, Loader2, Tag, X, ShoppingBag } from 'lucide-react';
+import { Banknote, CreditCard, Lock, Loader2, Tag, X, ShoppingBag, Store, Truck, Zap } from 'lucide-react';
 import { inr, STATES } from '@fitsecret/shared';
-import { orderTotals } from '@fitsecret/shared/store';
+import { orderTotals, sameDay } from '@fitsecret/shared/store';
 import { useCart } from '@/components/cart';
 import { QtyStepper, ShipProgress, LinePrice } from '@/components/CartDrawer';
 import { supabase, orderError } from '@/lib/supabase';
 import { payOnline, onlinePayments } from '@/lib/pay';
+import { SHOP_AT, HOURS, PICKUP, SAME_DAY } from '@/lib/settings';
 
 const SAVED = 'fs_address_v1';
 
@@ -19,6 +20,7 @@ export default function Checkout() {
   const router = useRouter();
   const [f, setF] = useState({ name: '', phone: '', email: '', line1: '', line2: '', city: 'Vijayawada', state: 'Andhra Pradesh', pincode: '', notes: '' });
   const [method, setMethod] = useState<'cod' | 'online'>(onlinePayments ? 'online' : 'cod');
+  const [pickup, setPickup] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const [code, setCode] = useState('');
@@ -37,7 +39,9 @@ export default function Checkout() {
     });
   }, [sb]);
 
-  const t0 = orderTotals(subtotal, combo.total + (coupon?.discount || 0), store);
+  // Pickup: no delivery charge (0016_pickup.sql zeroes it on the order too)
+  const t0 = orderTotals(subtotal, combo.total + (coupon?.discount || 0), pickup ? { ...store, shipping_fee: 0 } : store);
+  const fast = !pickup && sameDay(f.pincode, SAME_DAY);
   const pts = usePoints ? Math.min(points, Math.max(0, t0.total - t0.shipping)) : 0;
   const tot = { ...t0, total: t0.total - pts };
   const codOk = store.cod_enabled && tot.total <= store.cod_limit;
@@ -61,11 +65,14 @@ export default function Checkout() {
     if (!sb) return setErr('Online ordering opens soon. Please call or WhatsApp us to order.');
     setBusy(true);
     try {
-      const { name, phone, email, notes, ...address } = f;
+      const { name, phone, email, notes: n0, ...home } = f;
+      // Pickup sends the store as the address (place_order needs one) plus a flag; the note says it too, for any database version.
+      const address = pickup ? { line1: `Pick up at store: ${SHOP_AT}`, line2: '', city: 'Vijayawada', state: 'Andhra Pradesh', pincode: '520010', pickup: true } : home;
+      const notes = [pickup && 'STORE PICKUP', fast && 'SAME-DAY DELIVERY', n0].filter(Boolean).join(' · ');
       const { data, error } = await sb.rpc('place_order', { p: { name, phone, email, notes, address, payment_method: method, coupon: coupon?.code, points: pts || undefined,
         items: lines.map((l) => ({ item_id: l.id, qty: l.qty })) } });
       if (error) throw new Error(orderError(error.message));
-      localStorage.setItem(SAVED, JSON.stringify({ ...f, notes: '' }));
+      localStorage.setItem(SAVED, JSON.stringify({ ...f, notes: '' })); // the home address, never the store's
       const phone10 = phone.replace(/\D/g, '').slice(-10);
       clear();
       let paid = method === 'cod';
@@ -101,7 +108,7 @@ export default function Checkout() {
           </li>
         ))}
       </ul>
-      <div className="mt-4"><ShipProgress subtotal={tot.net} /></div>
+      {!pickup && <div className="mt-4"><ShipProgress subtotal={tot.net} /></div>}
       <div className="mt-5">
         {coupon ? (
           <div className="flex items-center justify-between rounded-[12px] border-[1.5px] border-haldi bg-haldi/15 px-3 py-2 text-sm">
@@ -128,7 +135,7 @@ export default function Checkout() {
         {combo.applied.map((c) => <Row key={c.id} k={`Combo: ${c.name}${c.sets > 1 ? ` ×${c.sets}` : ''}`} v={`−${inr(c.saving)}`} green />)}
         {coupon && <Row k={`Coupon ${coupon.code}`} v={`−${inr(coupon.discount)}`} green />}
         {pts > 0 && <Row k="Loyalty points" v={`−${inr(pts)}`} green />}
-        <Row k="Delivery" v={tot.shipping ? inr(tot.shipping) : 'Free'} />
+        <Row k={pickup ? 'Store pickup' : 'Delivery'} v={tot.shipping ? inr(tot.shipping) : 'Free'} />
         <div className="flex justify-between pt-2 text-lg font-bold"><dt>Total</dt><dd>{inr(tot.total)}</dd></div>
       </dl>
     </>
@@ -148,7 +155,17 @@ export default function Checkout() {
           <L label="Mobile number" hint="10 digits, for delivery updates"><input className="field" required inputMode="tel" pattern="[+0-9 \-]{10,15}" title="Enter a 10-digit mobile number" value={f.phone} onChange={set('phone')} autoComplete="tel" /></L>
           <div className="sm:col-span-2"><L label="Email (optional)"><input className="field" type="email" value={f.email} onChange={set('email')} autoComplete="email" /></L></div>
         </Step>
-        <Step n={2} title="Delivery address">
+        <Step n={2} title={PICKUP ? 'Delivery or pickup' : 'Delivery address'}>
+          {PICKUP && (
+            <div className="grid gap-3 sm:col-span-2 sm:grid-cols-2">
+              <PayOpt on={!pickup} onClick={() => setPickup(false)} icon={<Truck size={24} />} title="Deliver to me" sub={SAME_DAY.cutoff ? `Same day in Vijayawada if you order by ${hour(SAME_DAY.cutoff)}` : 'By courier, tracked on this site'} />
+              <PayOpt on={pickup} onClick={() => setPickup(true)} icon={<Store size={24} />} title="Pick up at the store" sub="MG Road, Labbipet · free · we WhatsApp you when it's ready" />
+            </div>
+          )}
+          {pickup ? (
+            <p className="rounded-[12px] bg-sage p-4 text-sm sm:col-span-2"><b>Fit Secrets, MG Road</b><br />Datta Towers, beside Subhamasthu Shopping Mall, opp. All India Radio, Labbipet{HOURS && <><br />{HOURS}</>}<br />
+              Bring your order number. Usually ready within an hour during store hours.</p>
+          ) : (<>
           <div className="sm:col-span-2"><L label="House / flat, street"><input className="field" required minLength={5} value={f.line1} onChange={set('line1')} autoComplete="address-line1" /></L></div>
           <div className="sm:col-span-2"><L label="Area, landmark (optional)"><input className="field" value={f.line2} onChange={set('line2')} autoComplete="address-line2" /></L></div>
           <L label="City"><input className="field" required value={f.city} onChange={set('city')} autoComplete="address-level2" /></L>
@@ -157,11 +174,13 @@ export default function Checkout() {
             <select className="field" value={f.state} onChange={set('state')} autoComplete="address-level1">{Object.values(STATES).sort().map((s) => <option key={s as string}>{s as string}</option>)}</select>
           </L></div>
           <div className="sm:col-span-2"><L label="Delivery notes (optional)"><textarea className="field" rows={2} maxLength={500} value={f.notes} onChange={set('notes')} /></L></div>
+            {fast && <p className="flex items-center gap-2 rounded-[12px] bg-lime/40 px-3 py-2 text-sm font-semibold text-indigo sm:col-span-2"><Zap size={16} />Same-day delivery to {f.pincode}: order now and it reaches you today.</p>}
+          </>)}
         </Step>
         <Step n={3} title="Payment">
           {onlinePayments && <PayOpt on={method === 'online'} onClick={() => setMethod('online')} icon={<CreditCard size={24} />} title="Pay online" sub="UPI, cards, netbanking" />}
-          <PayOpt on={method === 'cod'} disabled={!codOk} onClick={() => setMethod('cod')} icon={<Banknote size={24} />} title="Cash on delivery"
-            sub={codOk ? 'Pay when it arrives' : store.cod_enabled ? `Available up to ${inr(store.cod_limit)}` : 'Not available right now'} />
+          <PayOpt on={method === 'cod'} disabled={!codOk} onClick={() => setMethod('cod')} icon={<Banknote size={24} />} title={pickup ? "Pay at the store" : "Cash on delivery"}
+            sub={codOk ? (pickup ? 'Pay at the counter when you collect' : 'Pay when it arrives') : store.cod_enabled ? `Available up to ${inr(store.cod_limit)}` : 'Not available right now'} />
         </Step>
       </div>
 
@@ -182,6 +201,8 @@ export default function Checkout() {
     </form>
   );
 }
+
+const hour = (h: number) => `${h % 12 || 12} ${h < 12 ? 'am' : 'pm'}`;
 
 function Step({ n, title, children }: { n: number; title: string; children: React.ReactNode }) {
   return (

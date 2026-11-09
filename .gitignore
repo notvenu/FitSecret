@@ -13,3 +13,4 @@ next-env.d.ts
 *.tsbuildinfo
 apps/pos/ui/dist
 apps/web/public/admin
+supabase/.temp

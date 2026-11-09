@@ -8,10 +8,10 @@ import Buy from './Buy';
 import { TabRail, Pack, FitCheck, Glance, Ingredients, Routine, Nutrition, Compare, Reviews, Questions, Stack, Recent, Stars, type CmpCol, type StackItem } from './Modules';
 import Verify from '@/app/verify/Verify';
 import { Sprig, INGREDIENTS, ingredientsIn } from '@/components/Botanical';
-import { getProduct, getProducts, getReviews, getCertificates, alsoBought, type Product } from '@/lib/catalog';
+import { getProduct, getProducts, getReviews, getCertificates, alsoBought, getExpiry, type Product } from '@/lib/catalog';
 import { GOALS, goalsOf } from '@/lib/goals';
 import { getT } from '@/lib/lang';
-import { PHONE, FSSAI } from '@/lib/site';
+import { PHONE, FSSAI, SITE_URL, SAME_DAY, PICKUP } from '@/lib/site';
 
 export async function generateMetadata({ params }: { params: Promise<{ key: string }> }): Promise<Metadata> {
   const p = await getProduct(decodeURIComponent((await params).key));
@@ -35,7 +35,7 @@ export default async function PDP({ params }: { params: Promise<{ key: string }>
   const [p, all, t] = await Promise.all([getProduct(key), getProducts(), getT()]);
   if (!p) notFound();
   const ids = p.variants.map((v) => v.id);
-  const [reviews, certs, bought] = await Promise.all([getReviews(p.key), getCertificates(ids), alsoBought(ids)]);
+  const [reviews, certs, bought, expiry] = await Promise.all([getReviews(p.key), getCertificates(ids), alsoBought(ids), getExpiry(ids)]);
   const info = INFO[p.key] || {};
   const at = attributesOf(p);
   const owner = !!(info.finder as { allergens?: string[] } | undefined)?.allergens; // allergens the owner entered from the label, not our reading of the description
@@ -85,7 +85,8 @@ export default async function PDP({ params }: { params: Promise<{ key: string }>
 
   const faqs: [string, string][] = [
     ['Is this the genuine product?', `We buy ${p.brand || 'every brand'} only from the brand or its authorised distributor. Check the batch code on your pack in the "Made & verified" section.`],
-    ['How fast is delivery?', 'Orders are packed at our MG Road store in Vijayawada and sent by courier. You can track every order on this site, or pick it up at the store.'],
+    ['How fast is delivery?', [SAME_DAY.cutoff && `In Vijayawada, orders placed by ${SAME_DAY.cutoff % 12 || 12} ${SAME_DAY.cutoff < 12 ? 'am' : 'pm'} are delivered the same day.`,
+      'Other places get it by courier from our MG Road store, tracked on this site.', PICKUP && 'Or choose “Pick up at the store” at checkout: free, usually ready within an hour.'].filter(Boolean).join(' ')],
     ['Can I pay cash on delivery?', 'Yes, for most orders. Checkout shows if cash on delivery is available for your total.'],
     ['Can I return it?', 'Sealed, unused packs can be returned as described in our terms. Opened food and supplement packs cannot be returned for safety.'],
     ['How should I store it?', info.storage || 'As printed on the label. Usually a cool, dry place away from sunlight, with the lid closed.'],
@@ -102,7 +103,11 @@ export default async function PDP({ params }: { params: Promise<{ key: string }>
     ...(reviews.length ? { aggregateRating: { '@type': 'AggregateRating', ratingValue: rating.toFixed(1), reviewCount: reviews.length } } : {}),
   };
   const crumbs = [['/shop', t('shop.title')], [`/shop?category=${p.categorySlug}`, p.category], ...(p.subSlug ? [[`/shop?category=${p.subSlug}`, p.sub]] : [])];
-  const url = `${process.env.NEXT_PUBLIC_SITE_URL || ''}/p/${p.key}`;
+  const url = `${SITE_URL}/p/${p.key}`;
+  // Where the label facts came from, under each section built from them
+  const from = info.source && (
+    <p className="mt-4 text-xs text-ink-soft">From <a href={info.source.url} target="_blank" rel="noreferrer" className="underline">{info.source.name}</a>, checked {new Date(info.source.checked).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}. The label on your pack is final; recipes can change between batches.</p>
+  );
 
   return (
     <div className="page-top mx-auto max-w-[1360px] px-4 pb-32 md:px-8 md:pb-24">
@@ -125,12 +130,12 @@ export default async function PDP({ params }: { params: Promise<{ key: string }>
         </div>
 
         <div className="md:col-span-5">
-          {p.brand && <p className="text-ink-soft">{p.brand}</p>}
+          {p.brand && <Link href={`/shop?brand=${encodeURIComponent(p.brand)}`} className="text-ink-soft hover:text-ink hover:underline">{p.brand}</Link>}
           <h1 className="h2 mt-1 text-indigo">{p.name}</h1>
           {goal && <p className="mt-2 text-lg">{t(`promise.${goal}` as never)}</p>}
           {reviews.length > 0 && <a href="#reviews" className="mt-3 inline-flex items-center gap-2 text-sm"><Stars n={rating} /><span className="num text-ink-soft">{rating.toFixed(1)} · {reviews.length}</span></a>}
           {per100(v0.price, v0.size) && <p className="num mt-2 text-sm text-ink-soft">{per100(v0.price, v0.size)}</p>}
-          <Buy p={p} phone={PHONE} />
+          <Buy p={p} phone={PHONE} expiry={expiry} />
           <ul className="mt-6 flex flex-wrap gap-2 text-sm font-bold text-indigo">
             <li><a href="#verified" className="inline-flex items-center gap-1.5 rounded-full border-2 border-indigo bg-coral px-3 py-1 text-paper"><ShieldCheck size={16} />Verify this batch</a></li>
             <li className="inline-flex items-center gap-1.5 rounded-full border-2 border-indigo bg-paper px-3 py-1"><Store size={16} />Genuine, sourced direct</li>
@@ -155,11 +160,12 @@ export default async function PDP({ params }: { params: Promise<{ key: string }>
           <h2 className="h2 text-indigo">What&apos;s in it</h2>
           {!info.ingredients && <p className="mt-2 text-sm text-ink-soft">The main ingredient this product is named after. The full list and amounts are on the pack label.</p>}
           <div className="mt-8"><Ingredients items={ingredients} /></div>
+          {info.ingredients && from}
         </section>
       )}
 
       {(info.directions?.length || info.serving) && (
-        <section id="use" tabIndex={-1} className="scroll-mt-40 pt-20 outline-none"><h2 className="h2 text-indigo">How to use</h2><div className="mt-8"><Routine info={info} /></div></section>
+        <section id="use" tabIndex={-1} className="scroll-mt-40 pt-20 outline-none"><h2 className="h2 text-indigo">How to use</h2><div className="mt-8"><Routine info={info} /></div>{from}</section>
       )}
 
       {info.nutrition && (
@@ -167,6 +173,7 @@ export default async function PDP({ params }: { params: Promise<{ key: string }>
           <h2 className="h2 text-indigo">Nutrition facts</h2>
           {at.allergens.length > 0 && <p className="mt-3 font-semibold text-coral">{owner ? 'Contains' : 'The product details mention'}: {at.allergens.join(', ')}. Read the label for the full allergen statement.</p>}
           <div className="mt-6 max-w-xl"><Nutrition n={info.nutrition} serving={info.serving?.size} /></div>
+          {from}
         </section>
       )}
 

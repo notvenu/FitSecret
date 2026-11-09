@@ -12,8 +12,9 @@ Online store + offline-first billing & inventory for Fit Secrets, Vijayawada.
   GST/HSN are category defaults (the old site has none) and cost prices are blank until the first purchase entry. Verify GST with your CA.
 - Subcategories (Whey, Creatine, Pre-workout, Nuts, Seeds, Tea & Coffee...) are assigned by name rules in `scripts/import-catalog.mjs` (`SUBS`).
   Items can be moved by hand in POS → Inventory → Edit; new subcategories via Inventory → Categories ("Inside …").
-- Brand logos for the homepage background live in `apps/web/public/brands` and are listed in `apps/web/lib/brand-logos.ts`.
-  They were taken from each brand's official site; brands without a clean logo are left out. Add more by dropping a file and adding a line.
+- Brand logos for the homepage brand belt live in Supabase Storage (`catalog/brands/`) and are listed in `apps/web/lib/brand-logos.json`.
+  `node scripts/fetch-brand-logos.mjs contact-sheet.png` fetches each brand's own app icon, uploads it, and writes a contact sheet to check
+  by eye; brands without a sharp logo get a hand-lettered sticker. Add one by hand: upload it to `catalog/brands/` and add its URL to the JSON.
 
 ```
 apps/web        Next.js storefront (shop, cart, checkout, order tracking, customer accounts)
@@ -151,3 +152,21 @@ CSV export everywhere, thermal 80mm and A4 invoices, PIN login with admin/cashie
 ## Legal pages
 
 `/terms` and `/privacy` (apps/web/app/terms, apps/web/app/privacy) are templates written for an Indian online store (Consumer Protection Act 2019, DPDP Act 2023). The return window (7 days, sealed packs), refund timeline and grievance contact must be confirmed by the owner and reviewed by a legal adviser before launch.
+
+**Pickup, same-day delivery and best-before** (website): checkout offers *Pick up at the store* (free; the POS shows these orders as
+*Store pickup* with the steps Ready for pickup → Picked up, no AWB) and promises same-day delivery for local pincodes ordered before a cutoff.
+Product pages show the best-before month of the batch that ships next. Settings are env vars in `apps/web/.env.example`
+(`NEXT_PUBLIC_PICKUP`, `NEXT_PUBLIC_SAME_DAY_CUTOFF`, `NEXT_PUBLIC_SAME_DAY_PINCODES`, `NEXT_PUBLIC_GOOGLE_REVIEW_URL`). Needs `supabase/migrations/0016_pickup_expiry.sql`.
+Shop by brand: `/shop?brand=MuscleBlaze` (filter + its own page title for "<brand> in Vijayawada" searches).
+
+**Photos**: product photos and brand logos live in Supabase Storage, public bucket `catalog` (`products/`, `brands/`). The old Topiko
+photos were moved there on 2026-11-09 and `items.image` / `categories.image` point at them; new photos added in the POS go to Storage too.
+
+**Migrations 0006–0015 are not in this repository** (the code and tests refer to them; they were applied to Supabase but never committed).
+Export them from the Supabase project (Database → Migrations, or `supabase db pull`) and commit them here.
+
+**Nutrition labels and how-to-use** live in `packages/shared/product-info.js`, keyed by product (the website URL `/p/<key>`), and show on the
+product page as Nutrition facts, How to use, Ingredients and Safety. Every entry names its source; values not on the source are left out.
+To add labels from the shop's own packs: `node scripts/label-checklist.mjs > labels/checklist.csv` lists every product still missing
+something. Photograph each back label (ingredients, nutrition table, directions; several photos are fine) and save it in `labels/`
+named by the key in the checklist, e.g. `labels/on-creatine-unflavoured-250g.jpg`, `-2.jpg` for a second photo. Then ask Claude to read them in.
